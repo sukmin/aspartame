@@ -9,7 +9,7 @@ use std::str::Chars;
 
 /// File extensions (lower-case) that are listed when scanning a folder.
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "gif", "webp", "tif", "tiff", "ico", "tga",
+    "png", "jpg", "jpeg", "jpe", "jfif", "bmp", "gif", "webp", "tif", "tiff", "ico", "tga", "cr3",
 ];
 
 /// Whether the file has one of the supported image extensions (case-insensitive).
@@ -311,6 +311,7 @@ mod tests {
     fn extension_filter_is_case_insensitive() {
         assert!(is_supported(Path::new("a.PNG")));
         assert!(is_supported(Path::new("a.JpEg")));
+        assert!(is_supported(Path::new("IMG_0001.CR3")));
         assert!(!is_supported(Path::new("a.txt")));
         assert!(!is_supported(Path::new("noext")));
     }

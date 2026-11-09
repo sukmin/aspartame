@@ -6,6 +6,8 @@
 //! `Primary` request is decoded ("last request wins"). `Preload` requests are
 //! only honoured while they belong to the current image.
 
+use std::fs::File;
+use std::io::{BufRead, BufReader, Cursor, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -13,7 +15,9 @@ use std::thread;
 use anyhow::Context as _;
 use image::imageops::FilterType;
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+
+use crate::cr3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Priority {
@@ -144,18 +148,11 @@ pub fn decode(path: &Path, max_side: u32) -> anyhow::Result<DecodedImage> {
         .with_context(|| format!("cannot read file: {}", path.display()))?
         .len();
 
-    let mut reader = ImageReader::open(path)
-        .with_context(|| format!("cannot open file: {}", path.display()))?;
-    // The default limits reject perfectly valid very large photos.
-    reader.no_limits();
-    let reader = reader
-        .with_guessed_format()
-        .context("cannot detect the image format")?;
-
-    let mut decoder = reader.into_decoder().context("unsupported or corrupt image")?;
-    let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image = DynamicImage::from_decoder(decoder).context("failed to decode image")?;
-    image.apply_orientation(orientation);
+    let mut image = if cr3::is_cr3_file(path) {
+        decode_cr3(path)?
+    } else {
+        decode_standard(path)?
+    };
 
     let (original_width, original_height) = (image.width(), image.height());
     anyhow::ensure!(original_width > 0 && original_height > 0, "image has no pixels");
@@ -184,4 +181,40 @@ pub fn decode(path: &Path, max_side: u32) -> anyhow::Result<DecodedImage> {
         rgba: rgba.into_raw(),
         file_size,
     })
+}
+
+fn decode_standard(path: &Path) -> anyhow::Result<DynamicImage> {
+    let mut reader = ImageReader::open(path)
+        .with_context(|| format!("cannot open file: {}", path.display()))?;
+    // The default limits reject perfectly valid very large photos.
+    reader.no_limits();
+    let reader = reader
+        .with_guessed_format()
+        .context("cannot detect the image format")?;
+    decode_oriented(reader, None)
+}
+
+/// CR3 안의 JPEG를 디코딩합니다. 회전 정보는 JPEG가 아니라 컨테이너에 있습니다.
+fn decode_cr3(path: &Path) -> anyhow::Result<DynamicImage> {
+    let file = File::open(path)
+        .with_context(|| format!("cannot open file: {}", path.display()))?;
+    let preview = cr3::read_preview(&mut BufReader::new(file))?;
+    let mut reader = ImageReader::with_format(Cursor::new(preview.jpeg), ImageFormat::Jpeg);
+    reader.no_limits();
+    decode_oriented(reader, preview.orientation)
+}
+
+/// `orientation`이 `None`이면 파일 자체의 EXIF 방향을 따릅니다.
+fn decode_oriented<R: BufRead + Seek + 'static>(
+    reader: ImageReader<R>,
+    orientation: Option<Orientation>,
+) -> anyhow::Result<DynamicImage> {
+    let mut decoder = reader.into_decoder().context("unsupported or corrupt image")?;
+    let orientation = match orientation {
+        Some(orientation) => orientation,
+        None => decoder.orientation().unwrap_or(Orientation::NoTransforms),
+    };
+    let mut image = DynamicImage::from_decoder(decoder).context("failed to decode image")?;
+    image.apply_orientation(orientation);
+    Ok(image)
 }

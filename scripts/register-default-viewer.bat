@@ -19,7 +19,7 @@ set "APP_NAME=Aspartame"
 set "PROG_ID=Aspartame.Image"
 set "INSTALL_DIR=%LOCALAPPDATA%\Programs\Aspartame"
 set "EXE=%INSTALL_DIR%\aspartame.exe"
-set "EXTS=.png .jpg .jpeg .jpe .jfif .bmp .gif .webp .tif .tiff .ico .tga"
+set "EXTS=.png .jpg .jpeg .jpe .jfif .bmp .gif .webp .tif .tiff .ico .tga .cr3"
 
 rem --- 1) 실행 파일 찾기: 인자 > 스크립트 옆 > ..\target\release ---
 set "SRC="

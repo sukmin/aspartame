@@ -2,7 +2,7 @@
 
 Windows 11용 경량 이미지 뷰어. Rust + egui/eframe로 작성했습니다.
 
-- 지원 포맷: PNG, JPEG, BMP, GIF(첫 프레임), WebP, TIFF, ICO, TGA
+- 지원 포맷: PNG, JPEG, BMP, GIF(첫 프레임), WebP, TIFF, ICO, TGA, CR3(캐논 RAW, 파일에 내장된 JPEG로 표시, HDR PQ 촬영 파일 제외)
 - 창에 꽉 차게 보기(기본), 실제 크기, 커서 기준 확대/축소, 드래그 이동
 - 좌우 방향키로 같은 폴더 안의 이미지를 **이름순(탐색기와 같은 자연 정렬)**으로 이동
 - 백그라운드 디코딩, 앞뒤 이미지 프리로드, EXIF 회전 자동 적용

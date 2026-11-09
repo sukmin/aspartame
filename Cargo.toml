@@ -1,6 +1,6 @@
 [package]
 name = "aspartame"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Aspartame - a lightweight image viewer for Windows 11"
 build = "build.rs"

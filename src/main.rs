@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod cr3;
 mod image_loader;
 mod input;
 mod navigator;

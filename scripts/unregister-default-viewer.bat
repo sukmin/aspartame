@@ -12,7 +12,7 @@ rem ============================================================
 set "APP_NAME=Aspartame"
 set "PROG_ID=Aspartame.Image"
 set "INSTALL_DIR=%LOCALAPPDATA%\Programs\Aspartame"
-set "EXTS=.png .jpg .jpeg .jpe .jfif .bmp .gif .webp .tif .tiff .ico .tga"
+set "EXTS=.png .jpg .jpeg .jpe .jfif .bmp .gif .webp .tif .tiff .ico .tga .cr3"
 
 reg delete "HKCU\Software\RegisteredApplications" /v "%APP_NAME%" /f >nul 2>&1
 reg delete "HKCU\Software\%APP_NAME%" /f >nul 2>&1
