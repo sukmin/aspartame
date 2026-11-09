@@ -119,7 +119,7 @@
     <span class="tag">Rust 1.98</span>
     <span class="tag">eframe / egui 0.36.2</span>
     <span class="tag">image 0.25.10</span>
-    <span class="tag">버전 0.2.0</span>
+    <span class="tag">버전 0.3.0</span>
     <span class="tag">2026-09-13</span>
   </div>
 </header>
@@ -133,6 +133,8 @@
     <li><strong>핵심 기능 1</strong>: 창 크기에 꽉 차게 보기. 창 크기를 바꾸면 자동으로 다시 맞춥니다.</li>
     <li><strong>핵심 기능 2</strong>: 좌우 방향키로 같은 폴더의 이미지를 <em>이름순</em>으로 이동합니다. Windows 탐색기와 같은 자연 정렬이라 <code>img2</code>가 <code>img10</code>보다 앞에 옵니다.</li>
     <li>실제 크기(모니터 픽셀 1:1), 커서 기준 확대/축소, 드래그 이동, 전체 화면, 드래그 앤 드롭, 명령줄 인자 열기</li>
+    <li><strong>zip 갤러리</strong>: zip 파일을 열면 안의 이미지를 썸네일 격자로 보여 주고, 클릭하면 한 장씩 봅니다.</li>
+    <li><strong>CR3 저장</strong>: CR3의 내장 JPEG를 촬영 정보와 함께 JPEG 파일로 저장합니다(<kbd>Ctrl+S</kbd>).</li>
     <li>백그라운드 디코딩과 앞뒤 이미지 미리 읽기, EXIF 회전 자동 적용, GPU 한계를 넘는 초대형 이미지 자동 축소</li>
   </ul>
   <div class="callout info">이 문서는 배포 zip에 함께 들어 있는 사용자 겸 개발자 가이드입니다. 소스 코드는 <code>C:\workspace\aspartame</code>에 있으며, 개발 계획서(<code>DEVELOPMENT_PLAN.md / .html</code>)와 짝을 이룹니다.</div>
@@ -169,12 +171,14 @@
       <tr><td class="nowrap"><kbd>Home</kbd> / <kbd>End</kbd></td><td>첫 / 마지막 이미지</td></tr>
       <tr><td class="nowrap"><kbd>F</kbd> 또는 <kbd>0</kbd></td><td>창에 꽉 차게 보기 (기본 상태)</td></tr>
       <tr><td class="nowrap"><kbd>1</kbd></td><td>실제 크기. 이미지 1픽셀 = 모니터 1픽셀</td></tr>
-      <tr><td class="nowrap"><kbd>+</kbd> / <kbd>-</kbd>, 마우스 휠</td><td>확대 / 축소. 휠은 커서 아래 지점이 고정됩니다. 한 칸에 1.25배, 범위 1%~3200%</td></tr>
+      <tr><td class="nowrap"><kbd>+</kbd> / <kbd>-</kbd>, <kbd>Alt</kbd>+마우스 휠</td><td>확대 / 축소. 휠은 커서 아래 지점이 고정됩니다. 한 칸에 1.25배, 범위 1%~3200%</td></tr>
+      <tr><td class="nowrap">마우스 휠</td><td>이전 / 다음 이미지. zip 갤러리에서는 스크롤</td></tr>
+      <tr><td class="nowrap"><kbd>Ctrl+S</kbd></td><td>CR3의 내장 JPEG를 촬영 정보와 함께 저장</td></tr>
       <tr><td class="nowrap">마우스 드래그</td><td>확대된 이미지 이동. 창보다 작은 축은 항상 가운데 정렬</td></tr>
       <tr><td class="nowrap"><kbd>F11</kbd>, 더블클릭</td><td>전체 화면 토글. 전체 화면에서 2초간 움직임이 없으면 커서를 숨깁니다</td></tr>
-      <tr><td class="nowrap"><kbd>Esc</kbd></td><td>메뉴가 열려 있으면 메뉴 닫기, 전체 화면이면 해제, 그 외에는 종료</td></tr>
+      <tr><td class="nowrap"><kbd>Esc</kbd></td><td>메뉴가 열려 있으면 메뉴 닫기, 전체 화면이면 해제, zip의 한 장 보기에서는 갤러리로 복귀, 그 외에는 종료</td></tr>
       <tr><td class="nowrap"><kbd>I</kbd></td><td>파일 정보 오버레이 토글 (이름, 경로, 크기, 용량, 배율, 순번)</td></tr>
-      <tr><td class="nowrap"><kbd>F5</kbd></td><td>폴더 다시 읽기 (파일이 추가·삭제된 뒤)</td></tr>
+      <tr><td class="nowrap"><kbd>F5</kbd></td><td>폴더 또는 zip 다시 읽기 (파일이 추가·삭제된 뒤)</td></tr>
       <tr><td class="nowrap">우클릭</td><td>위 기능이 모두 담긴 컨텍스트 메뉴</td></tr>
       <tr><td class="nowrap">드래그 앤 드롭</td><td>창에 이미지를 놓으면 그 파일과 폴더를 엽니다</td></tr>
     </tbody>
@@ -225,6 +229,10 @@
 │   ├── app.rs                 ViewerApp: 상태, 입력 적용, 그리기, 텍스처 캐시, 창 제어
 │   ├── image_loader.rs        백그라운드 디코딩 스레드와 요청 큐
 │   ├── navigator.rs           폴더 스캔, 이름순 자연 정렬, 이전/다음 이동
+│   ├── cr3.rs                 CR3에서 내장 JPEG 추출, EXIF를 넣어 저장
+│   ├── archive.rs             zip 안의 이미지 목록과 내용 읽기
+│   ├── gallery.rs             zip 갤러리 화면
+│   ├── thumbnails.rs          썸네일을 만드는 작업 스레드
 │   ├── viewport.rs            창에 맞춤 / 실제 크기 / 커서 기준 확대 계산
 │   └── input.rs               키·휠·드롭 입력 → Action 변환
 ├── scripts/
@@ -293,6 +301,8 @@ LoadResult  { path, generation, priority, result: Ok(DecodedImage) | Err(String)
     <li><code>into_rgba8()</code>로 스트레이트 알파 RGBA8 버퍼를 만들어 UI 스레드로 넘깁니다.</li>
   </ol>
   <p>CR3는 <code>cr3.rs</code>가 먼저 처리합니다. 파일 앞부분의 <code>ftyp</code> 브랜드로 판별한 뒤 RAW를 현상하지 않고 카메라가 넣어 둔 가장 큰 JPEG를 꺼내 위 단계로 넘깁니다. 내장 JPEG에는 EXIF가 없어 회전 정보는 컨테이너의 <code>CMT1</code> 상자에서 읽습니다. HDR PQ로 촬영한 파일은 미리보기가 모두 HEVC라서 오류 메시지를 표시합니다.</p>
+  <p>저장(<kbd>Ctrl+S</kbd>)은 같은 JPEG를 다시 압축하지 않고 SOI 바로 뒤에 APP1(Exif) 세그먼트만 넣습니다. <code>CMT1</code>(IFD0), <code>CMT2</code>(Exif), <code>CMT4</code>(GPS)는 각각 자기 기준의 오프셋을 쓰므로 항목을 읽어 하나의 TIFF로 다시 씁니다.</p>
+  <p>zip은 <code>archive.rs</code>가 중앙 디렉터리만 읽어 이미지 목록을 만듭니다. 항목은 <code>앨범.zip\폴더\사진.jpg</code> 형태의 가상 경로로 구분하므로 <code>Navigator</code>와 텍스처 캐시를 그대로 씁니다. UTF-8이 아닌 이름은 옛 Windows 탐색기가 만든 CP949로 해석합니다. 썸네일은 <code>thumbnails.rs</code>의 작업 스레드(최대 4개)가 만들며, 스크롤하면 대기열을 통째로 바꿔 지나간 칸은 디코딩하지 않습니다.</p>
 
   <h3 id="arch-nav">5.3 이름순 폴더 탐색</h3>
   <p><code>navigator.rs</code>는 열린 파일의 폴더를 한 번 스캔해 지원 확장자만 남기고 정렬한 목록과 현재 인덱스를 들고 있습니다.</p>
@@ -328,7 +338,7 @@ draw   = 창 중심에 (w·scale) × (h·scale) 크기로 배치</code></pre>
   <h4>커서 기준 확대 (Custom)</h4>
 <pre><code>// 커서 m, 현재 이미지 중심 c, 배율 s0 → s1
 c' = m − (m − c) · (s1 / s0)      // 커서 아래 이미지 지점이 그대로 머무는 새 중심</code></pre>
-  <p>휠 한 칸에 1.25배, 범위는 물리 픽셀 기준 1%~3200%입니다. 키보드 <kbd>+</kbd>/<kbd>-</kbd>는 창 중심을 기준점으로 씁니다.</p>
+  <p><kbd>Alt</kbd>+휠 한 칸에 1.25배, 범위는 물리 픽셀 기준 1%~3200%입니다. 키보드 <kbd>+</kbd>/<kbd>-</kbd>는 창 중심을 기준점으로 씁니다.</p>
   <h4>이동 범위 제한 (<code>clamp_pan</code>)</h4>
   <p>그려진 이미지가 창보다 작은 축은 오프셋을 0으로 고정해 가운데 정렬하고, 큰 축은 이미지 가장자리가 창 안쪽으로 들어와 빈틈이 생기지 않는 범위로 제한합니다.</p>
 
@@ -344,7 +354,7 @@ c' = m − (m − c) · (s1 / s0)      // 커서 아래 이미지 지점이 그�
   <p><code>input.rs</code>의 <code>collect_actions()</code>는 egui의 <code>InputState</code>를 읽어 프레임마다 <code>Action</code> 목록을 만듭니다. 앱 로직은 키 코드가 아니라 액션만 보므로 단축키를 바꾸기 쉽습니다.</p>
   <ul>
     <li>키: 방향키/PageUp/PageDown → <code>Next/Prev</code>, Home/End, F/0 → <code>Fit</code>, 1 → <code>ActualSize</code>, +/=/- → 확대·축소, F11, Esc, F5, I, Ctrl+O.</li>
-    <li>휠: <code>Event::MouseWheel</code>을 단위별로 "칸" 수로 환산합니다(Line은 1칸, Point는 50포인트당 1칸, Page는 5칸). 한 프레임의 칸 수를 합쳐 <code>ZoomBy(1.25^칸)</code> 하나로 보냅니다.</li>
+    <li>휠: <code>Event::MouseWheel</code>을 단위별로 "칸" 수로 환산합니다(Line은 1칸, Point는 50포인트당 1칸, Page는 5칸). 한 프레임의 칸 수를 합쳐 <kbd>Alt</kbd>를 누르고 있으면 <code>ZoomBy(1.25^칸)</code>, 아니면 <code>Wheel(칸)</code>으로 보냅니다. <code>Wheel</code>은 <code>WheelStepper</code>가 온전한 칸이 될 때까지 모아 이미지를 넘기므로 터치패드에서도 프레임마다 넘어가지 않습니다.</li>
     <li>드롭: <code>raw.dropped_files</code>의 경로를 모아 <code>OpenPaths</code>로 보내고, 첫 번째 실제 파일을 엽니다.</li>
     <li>마우스 드래그, 더블클릭, 우클릭 메뉴는 캔버스의 <code>Response</code>에서 처리합니다. 메뉴가 열린 프레임의 Esc는 종료로 이어지지 않도록 <code>Popup::is_any_open</code>으로 걸러 냅니다.</li>
     <li>egui 기본 동작인 Ctrl+<kbd>+</kbd>/<kbd>-</kbd> UI 배율 변경은 이미지 확대와 충돌하므로 <code>zoom_with_keyboard = false</code>로 끕니다.</li>
@@ -371,7 +381,7 @@ c' = m − (m − c) · (s1 / s0)      // 커서 아래 이미지 지점이 그�
   </ul>
   <h3>명령</h3>
 <pre><code>cargo run -- "C:\Pictures\sample.jpg"   # 개발 실행. 콘솔에 로그 출력 (RUST_LOG=debug 로 상세)
-cargo test                              # 단위 테스트 21개
+cargo test                              # 단위 테스트 43개
 cargo build --release                   # target\release\aspartame.exe
 scripts\package.bat                     # 릴리스 빌드 + dist\Aspartame + zip
 scripts\package.bat /nobuild            # 빌드 생략, 배포 폴더만 다시 구성</code></pre>
@@ -420,6 +430,10 @@ scripts\package.bat /nobuild            # 빌드 생략, 배포 폴더만 다시
     <tbody>
       <tr><td class="nowrap">navigator (8)</td><td>숫자 값 순 정렬, 대소문자 무시, 앞자리 0 처리, 한글 정렬, 확장자 필터, 임시 폴더 스캔과 이동·순환·삽입, 삭제된 파일 refresh, 파일 1개일 때 무동작</td></tr>
       <tr><td class="nowrap">viewport (6)</td><td>가로/세로 Fit 계산과 가운데 정렬, 작은 이미지 확대, 물리 픽셀 기준 실제 크기, 커서 아래 지점 고정 확대, 배율 상·하한, 이동 범위 제한</td></tr>
+      <tr><td class="nowrap">cr3 (13)</td><td>가장 큰 JPEG 선택, 썸네일용 PRVW 우선, 잘린 파일의 PRVW 대체, HEVC 전용 파일 오류, 회전 정보, 손상 파일 무패닉, EXIF 병합과 이미지 데이터 보존, GPS 없는 파일, 오프셋 태그 제거</td></tr>
+      <tr><td class="nowrap">archive (6)</td><td>이미지만 자연 정렬로 나열, 항목 읽기, CP949 이름, 가상 경로가 zip 밖으로 나가지 않음, 같은 가상 경로의 중복 제거, 내용 기준 zip 판별과 손상 zip 거부</td></tr>
+      <tr><td class="nowrap">gallery (5), thumbnails (1), image_loader (1)</td><td>열 수 계산, 선택 칸 스크롤, 휠 스크롤, 필요한 칸은 제거하지 않음, 썸네일 맞춤, 작업 스레드의 썸네일 생성과 손상 항목 보고, 거대한 크기를 주장하는 zip 항목 거부</td></tr>
+      <tr><td class="nowrap">input (3)</td><td>휠은 이동이고 Alt+휠은 확대, 작은 휠 값 누적, 방향 전환 시 누적값 폐기</td></tr>
     </tbody>
   </table></div>
   <h3>실행 검증 (릴리스 exe)</h3>
@@ -481,7 +495,7 @@ scripts\package.bat /nobuild            # 빌드 생략, 배포 폴더만 다시
 </section>
 
 <footer>
-  Aspartame 0.2.0 · 이 문서의 원본은 소스 트리의 <code>docs\guide.html</code>이며 <code>scripts\package.bat</code>가 배포 폴더에 <code>개발가이드.html</code>로 복사합니다.
+  Aspartame 0.3.0 · 이 문서의 원본은 소스 트리의 <code>docs\guide.html</code>이며 <code>scripts\package.bat</code>가 배포 폴더에 <code>개발가이드.html</code>로 복사합니다.
 </footer>
 
 </main>

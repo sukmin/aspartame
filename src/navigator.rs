@@ -160,6 +160,18 @@ impl Navigator {
         self.index = Some(index);
     }
 
+    /// 폴더가 아닌 곳(zip 등)의 목록을 엽니다. `dir`이 없으므로 새로 고침 대상이 아닙니다.
+    pub fn open_list(&mut self, files: Vec<PathBuf>) {
+        self.dir = None;
+        self.index = (!files.is_empty()).then_some(0);
+        self.files = files;
+    }
+
+    /// `index`번 이미지를 선택합니다.
+    pub fn select(&mut self, index: usize) {
+        self.jump_to(index);
+    }
+
     pub fn current(&self) -> Option<&Path> {
         self.index.and_then(|i| self.files.get(i)).map(PathBuf::as_path)
     }

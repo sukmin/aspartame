@@ -24,6 +24,15 @@ const PREVIEW_UUID: [u8; 16] = [
 ];
 const JPEG_MAGIC: [u8; 3] = [0xff, 0xd8, 0xff];
 const TIFF_TAG_ORIENTATION: u16 = 0x0112;
+const TIFF_TAG_EXIF_POINTER: u16 = 0x8769;
+const TIFF_TAG_GPS_POINTER: u16 = 0x8825;
+const GPS_TAG_LATITUDE: u16 = 0x0002;
+/// 값이 다른 IFD의 오프셋이라 그대로 복사하면 엉뚱한 위치를 가리키는 태그.
+const EXIF_TAG_INTEROP_POINTER: u16 = 0xA005;
+/// `CMT1`에 있지만 JPEG에서는 SOF가 대신하는 태그(크기, 비트 수, 압축 방식).
+const TIFF_TAGS_DESCRIBING_PIXELS: [u16; 4] = [0x0100, 0x0101, 0x0102, 0x0103];
+/// APP1 세그먼트의 길이 필드는 16비트이고 자신의 2바이트와 `Exif\0\0` 6바이트를 포함합니다.
+const MAX_EXIF_TIFF_LEN: usize = u16::MAX as usize - 8;
 
 pub struct Cr3Preview {
     pub jpeg: Vec<u8>,
@@ -37,27 +46,67 @@ pub fn is_cr3_file(path: &Path) -> bool {
     File::open(path)
         .and_then(|mut file| file.read_exact(&mut head))
         .is_ok()
-        && &head[4..12] == b"ftypcrx "
+        && has_cr3_signature(&head)
 }
 
-/// 가장 큰 내장 JPEG를 읽습니다. 트랙에 쓸 만한 JPEG가 없으면 `PRVW`로 대신합니다.
+pub fn has_cr3_signature(head: &[u8]) -> bool {
+    head.get(4..12) == Some(b"ftypcrx ")
+}
+
+pub fn has_cr3_extension(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("cr3"))
+}
+
+/// 내장 JPEG를 찾아볼 위치.
+#[derive(Clone, Copy)]
+enum PreviewSource {
+    /// 트랙에 든 가장 큰 JPEG. 보통 센서 크기입니다.
+    Track,
+    /// 1620x1080 `PRVW`.
+    Prvw,
+}
+
+/// 표시용 JPEG와 회전 정보를 읽습니다.
 pub fn read_preview<R: Read + Seek>(reader: &mut R) -> anyhow::Result<Cr3Preview> {
+    let (moov, jpeg) = read_moov_and_jpeg(reader, [PreviewSource::Track, PreviewSource::Prvw])?;
+    Ok(Cr3Preview { jpeg, orientation: read_orientation(&moov) })
+}
+
+/// 썸네일용으로 작은 `PRVW`를 먼저 읽습니다. 센서 크기 JPEG보다 디코딩이 훨씬 빠릅니다.
+pub fn read_small_preview<R: Read + Seek>(reader: &mut R) -> anyhow::Result<Cr3Preview> {
+    let (moov, jpeg) = read_moov_and_jpeg(reader, [PreviewSource::Prvw, PreviewSource::Track])?;
+    Ok(Cr3Preview { jpeg, orientation: read_orientation(&moov) })
+}
+
+/// 저장용 JPEG를 만듭니다. 내장 JPEG에 없는 촬영·회전 정보를 EXIF로 넣으며,
+/// 이미지 데이터는 다시 압축하지 않으므로 화질이 변하지 않습니다.
+pub fn export_jpeg<R: Read + Seek>(reader: &mut R) -> anyhow::Result<Vec<u8>> {
+    let (moov, jpeg) = read_moov_and_jpeg(reader, [PreviewSource::Track, PreviewSource::Prvw])?;
+    Ok(match build_exif(&moov) {
+        Some(tiff) => insert_exif(&jpeg, &tiff),
+        None => jpeg,
+    })
+}
+
+/// `moov`와 내장 JPEG를 읽습니다. `order` 순서로 찾아 처음 나온 JPEG를 씁니다.
+fn read_moov_and_jpeg<R: Read + Seek>(
+    reader: &mut R,
+    order: [PreviewSource; 2],
+) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     const READ_FAILED: &str = "CR3 파일을 읽지 못했습니다";
 
     let file_len = reader.seek(SeekFrom::End(0)).context(READ_FAILED)?;
     let top = scan_top_level(reader, file_len).context(READ_FAILED)?;
     let moov = top.moov.context("CR3 구조가 올바르지 않습니다 (moov 없음)")?;
     let moov = read_range(reader, moov).context(READ_FAILED)?;
-    let orientation = read_orientation(&moov);
 
-    if let Some(track) = largest_jpeg_track(reader, &moov, file_len).context(READ_FAILED)? {
-        let jpeg = read_range(reader, track).context(READ_FAILED)?;
-        return Ok(Cr3Preview { jpeg, orientation });
-    }
-    if let Some(preview) = top.preview {
-        let body = read_range(reader, preview).context(READ_FAILED)?;
-        if let Some(jpeg) = prvw_jpeg(&body) {
-            return Ok(Cr3Preview { jpeg: jpeg.to_vec(), orientation });
+    for source in order {
+        let jpeg = match source {
+            PreviewSource::Track => read_track_jpeg(reader, &moov, file_len),
+            PreviewSource::Prvw => read_prvw_jpeg(reader, top.preview),
+        };
+        if let Some(jpeg) = jpeg.context(READ_FAILED)? {
+            return Ok((moov, jpeg));
         }
     }
     bail!("표시할 수 있는 JPEG 미리보기가 없는 CR3입니다 (HDR PQ 촬영 파일은 미지원)")
@@ -157,6 +206,28 @@ fn read_range<R: Read + Seek>(reader: &mut R, range: Range) -> io::Result<Vec<u8
     Ok(bytes)
 }
 
+fn read_track_jpeg<R: Read + Seek>(
+    reader: &mut R,
+    moov: &[u8],
+    file_len: u64,
+) -> io::Result<Option<Vec<u8>>> {
+    match largest_jpeg_track(reader, moov, file_len)? {
+        Some(track) => read_range(reader, track).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn read_prvw_jpeg<R: Read + Seek>(
+    reader: &mut R,
+    preview: Option<Range>,
+) -> io::Result<Option<Vec<u8>>> {
+    let Some(preview) = preview else {
+        return Ok(None);
+    };
+    let body = read_range(reader, preview)?;
+    Ok(prvw_jpeg(&body).map(<[u8]>::to_vec))
+}
+
 fn largest_jpeg_track<R: Read + Seek>(
     reader: &mut R,
     moov: &[u8],
@@ -200,11 +271,172 @@ fn first_sample(trak: &[u8]) -> Option<Range> {
     Some(Range { offset, len: u64::from(len) })
 }
 
-fn read_orientation(moov: &[u8]) -> Option<Orientation> {
+fn canon_metadata(moov: &[u8]) -> Option<&[u8]> {
     Boxes(moov)
         .filter(|(kind, _)| kind == b"uuid")
-        .find_map(|(_, body)| child(body.strip_prefix(&CANON_UUID)?, b"CMT1"))
-        .and_then(tiff_orientation)
+        .find_map(|(_, body)| body.strip_prefix(&CANON_UUID))
+}
+
+fn read_orientation(moov: &[u8]) -> Option<Orientation> {
+    child(canon_metadata(moov)?, b"CMT1").and_then(tiff_orientation)
+}
+
+/// TIFF IFD의 항목 하나. `value`는 리틀엔디언 원본 바이트입니다.
+struct IfdEntry {
+    tag: u16,
+    kind: u16,
+    count: u32,
+    value: Vec<u8>,
+}
+
+impl IfdEntry {
+    fn long(tag: u16, value: u32) -> Self {
+        Self { tag, kind: 4, count: 1, value: value.to_le_bytes().to_vec() }
+    }
+
+    /// IFD 뒤쪽 데이터 영역에서 차지하는 크기. 4바이트 이하는 항목 안에 들어갑니다.
+    /// TIFF는 오프셋을 짝수로 맞춰야 합니다.
+    fn data_len(&self) -> usize {
+        match self.value.len() {
+            0..=4 => 0,
+            len => len + len % 2,
+        }
+    }
+}
+
+fn tiff_type_size(kind: u16) -> Option<usize> {
+    match kind {
+        1 | 2 | 6 | 7 => Some(1),
+        3 | 8 => Some(2),
+        4 | 9 | 11 => Some(4),
+        5 | 10 | 12 => Some(8),
+        _ => None,
+    }
+}
+
+/// 리틀엔디언 TIFF의 첫 IFD를 읽습니다. 지금까지 확인한 CR3는 모두 리틀엔디언입니다.
+fn read_ifd(tiff: &[u8]) -> Option<Vec<IfdEntry>> {
+    if !tiff.starts_with(b"II*\0") {
+        return None;
+    }
+    let u16_at = |offset: usize| {
+        Some(u16::from_le_bytes(tiff.get(offset..offset.checked_add(2)?)?.try_into().ok()?))
+    };
+    let u32_at = |offset: usize| {
+        Some(u32::from_le_bytes(tiff.get(offset..offset.checked_add(4)?)?.try_into().ok()?))
+    };
+
+    let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let mut entries = Vec::new();
+    for index in 0..usize::from(u16_at(ifd)?) {
+        let entry = ifd.checked_add(2 + 12 * index)?;
+        let (tag, kind, count) = (u16_at(entry)?, u16_at(entry + 2)?, u32_at(entry + 4)?);
+        let Some(size) = tiff_type_size(kind) else {
+            continue;
+        };
+        let len = usize::try_from(count).ok()?.checked_mul(size)?;
+        let start = match len {
+            0..=4 => entry + 8,
+            _ => usize::try_from(u32_at(entry + 8)?).ok()?,
+        };
+        let value = tiff.get(start..start.checked_add(len)?)?.to_vec();
+        entries.push(IfdEntry { tag, kind, count, value });
+    }
+    Some(entries)
+}
+
+/// 헤더를 뺀 IFD의 전체 크기.
+fn ifd_len(entries: &[IfdEntry]) -> usize {
+    2 + 12 * entries.len() + 4 + entries.iter().map(IfdEntry::data_len).sum::<usize>()
+}
+
+/// `out`의 끝에 IFD를 씁니다. `out`의 시작이 TIFF 헤더여야 오프셋이 맞습니다.
+fn write_ifd(out: &mut Vec<u8>, entries: &[IfdEntry]) {
+    let mut data_offset = out.len() + 2 + 12 * entries.len() + 4;
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for entry in entries {
+        out.extend_from_slice(&entry.tag.to_le_bytes());
+        out.extend_from_slice(&entry.kind.to_le_bytes());
+        out.extend_from_slice(&entry.count.to_le_bytes());
+        if entry.data_len() == 0 {
+            let mut inline = [0u8; 4];
+            inline[..entry.value.len()].copy_from_slice(&entry.value);
+            out.extend_from_slice(&inline);
+        } else {
+            out.extend_from_slice(&(data_offset as u32).to_le_bytes());
+            data_offset += entry.data_len();
+        }
+    }
+    out.extend_from_slice(&0u32.to_le_bytes()); // 다음 IFD 없음
+    for entry in entries.iter().filter(|entry| entry.data_len() > 0) {
+        out.extend_from_slice(&entry.value);
+        out.resize(out.len() + entry.data_len() - entry.value.len(), 0);
+    }
+}
+
+/// `CMT1`(IFD0), `CMT2`(Exif), `CMT4`(GPS)를 하나의 TIFF로 합칩니다.
+/// 각 상자는 자기 시작점 기준의 오프셋을 쓰므로 그대로 이어 붙일 수 없습니다.
+fn build_exif(moov: &[u8]) -> Option<Vec<u8>> {
+    let canon = canon_metadata(moov)?;
+    let mut ifd0 = read_ifd(child(canon, b"CMT1")?)?;
+    let exif = child(canon, b"CMT2")
+        .and_then(read_ifd)
+        .map(|ifd| {
+            let mut ifd = ifd;
+            ifd.retain(|entry| entry.tag != EXIF_TAG_INTEROP_POINTER);
+            ifd
+        })
+        .filter(|ifd| !ifd.is_empty());
+    // GPS를 끈 사진의 CMT4에는 버전 태그만 있습니다.
+    let gps = child(canon, b"CMT4")
+        .and_then(read_ifd)
+        .filter(|ifd| ifd.iter().any(|entry| entry.tag == GPS_TAG_LATITUDE));
+
+    ifd0.retain(|entry| {
+        !TIFF_TAGS_DESCRIBING_PIXELS.contains(&entry.tag)
+            && entry.tag != TIFF_TAG_EXIF_POINTER
+            && entry.tag != TIFF_TAG_GPS_POINTER
+    });
+    // 포인터 항목의 개수가 IFD0 크기를 정하므로 먼저 자리를 잡고 값은 나중에 씁니다.
+    if exif.is_some() {
+        ifd0.push(IfdEntry::long(TIFF_TAG_EXIF_POINTER, 0));
+    }
+    if gps.is_some() {
+        ifd0.push(IfdEntry::long(TIFF_TAG_GPS_POINTER, 0));
+    }
+    ifd0.sort_by_key(|entry| entry.tag);
+
+    let exif_offset = 8 + ifd_len(&ifd0);
+    let gps_offset = exif_offset + exif.as_deref().map_or(0, ifd_len);
+    for entry in &mut ifd0 {
+        match entry.tag {
+            TIFF_TAG_EXIF_POINTER => entry.value = (exif_offset as u32).to_le_bytes().to_vec(),
+            TIFF_TAG_GPS_POINTER => entry.value = (gps_offset as u32).to_le_bytes().to_vec(),
+            _ => {}
+        }
+    }
+
+    let mut tiff = b"II*\0\x08\0\0\0".to_vec();
+    write_ifd(&mut tiff, &ifd0);
+    if let Some(exif) = &exif {
+        write_ifd(&mut tiff, exif);
+    }
+    if let Some(gps) = &gps {
+        write_ifd(&mut tiff, gps);
+    }
+    (tiff.len() <= MAX_EXIF_TIFF_LEN).then_some(tiff)
+}
+
+/// SOI 바로 뒤에 APP1(Exif) 세그먼트를 넣습니다.
+fn insert_exif(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(jpeg.len() + tiff.len() + 10);
+    out.extend_from_slice(&jpeg[..2]);
+    out.extend_from_slice(&[0xff, 0xe1]);
+    out.extend_from_slice(&((tiff.len() + 8) as u16).to_be_bytes());
+    out.extend_from_slice(b"Exif\0\0");
+    out.extend_from_slice(tiff);
+    out.extend_from_slice(&jpeg[2..]);
+    out
 }
 
 fn tiff_orientation(tiff: &[u8]) -> Option<Orientation> {
@@ -324,6 +556,28 @@ mod tests {
     }
 
     #[test]
+    fn small_preview_prefers_prvw_and_falls_back_to_the_track() {
+        let (full, small) = (jpeg(64, 32), jpeg(8, 4));
+        let with_prvw = build_cr3(&[&full], 6, Some(&small));
+        let preview = read_small_preview(&mut Cursor::new(&with_prvw)).unwrap();
+        assert!(preview.jpeg == small);
+        assert_eq!(preview.orientation, Some(Orientation::Rotate90));
+
+        let without_prvw = build_cr3(&[&full], 1, None);
+        assert!(read_small_preview(&mut Cursor::new(&without_prvw)).unwrap().jpeg == full);
+    }
+
+    #[test]
+    fn export_drops_pointer_tags_that_would_dangle() {
+        let cmt = [cmt1(1), bx(b"CMT2", &tiff_with(EXIF_TAG_INTEROP_POINTER, 4, 1, &[0x40, 0, 0, 0]))];
+        let file = build_cr3_with_metadata(&jpeg(8, 4), &cmt);
+        let saved = export_jpeg(&mut Cursor::new(&file)).unwrap();
+        let ifd0 = read_ifd(exif_of(&saved)).unwrap();
+        // 남는 태그가 없으므로 Exif IFD 자체가 만들어지지 않아야 합니다.
+        assert!(ifd0.iter().all(|entry| entry.tag != TIFF_TAG_EXIF_POINTER));
+    }
+
+    #[test]
     fn falls_back_to_prvw_when_the_file_is_truncated() {
         let (full, small) = (jpeg(64, 32), jpeg(8, 4));
         let mut file = build_cr3(&[&full], 1, Some(&small));
@@ -354,6 +608,129 @@ mod tests {
                 let mut damaged = file.clone();
                 damaged[index] = value;
                 let _ = read(&damaged);
+            }
+        }
+    }
+
+    /// 태그 하나짜리 TIFF. 값이 4바이트를 넘으면 뒤쪽 데이터 영역에 둡니다.
+    fn tiff_with(tag: u16, kind: u16, count: u32, value: &[u8]) -> Vec<u8> {
+        let mut tiff = b"II*\0".to_vec();
+        tiff.extend_from_slice(&8u32.to_le_bytes());
+        tiff.extend_from_slice(&1u16.to_le_bytes());
+        tiff.extend_from_slice(&tag.to_le_bytes());
+        tiff.extend_from_slice(&kind.to_le_bytes());
+        tiff.extend_from_slice(&count.to_le_bytes());
+        if value.len() <= 4 {
+            let mut inline = [0u8; 4];
+            inline[..value.len()].copy_from_slice(value);
+            tiff.extend_from_slice(&inline);
+            tiff.extend_from_slice(&[0; 4]);
+        } else {
+            tiff.extend_from_slice(&26u32.to_le_bytes());
+            tiff.extend_from_slice(&[0; 4]);
+            tiff.extend_from_slice(value);
+        }
+        tiff
+    }
+
+    /// 저장한 JPEG의 APP1에서 TIFF 부분을 꺼냅니다.
+    fn exif_of(jpeg: &[u8]) -> &[u8] {
+        assert_eq!(&jpeg[..4], &[0xff, 0xd8, 0xff, 0xe1]);
+        let len = usize::from(u16::from_be_bytes([jpeg[4], jpeg[5]]));
+        assert_eq!(&jpeg[6..12], b"Exif\0\0");
+        &jpeg[12..4 + len]
+    }
+
+    /// 지정한 위치의 IFD를 읽을 수 있게 그 위치를 첫 IFD로 삼는 사본을 돌려줍니다.
+    fn ifd_at(tiff: &[u8], offset: u32) -> Vec<IfdEntry> {
+        let mut copy = tiff.to_vec();
+        copy[4..8].copy_from_slice(&offset.to_le_bytes());
+        read_ifd(&copy).unwrap()
+    }
+
+    fn value_of(entries: &[IfdEntry], tag: u16) -> Vec<u8> {
+        entries.iter().find(|entry| entry.tag == tag).unwrap().value.clone()
+    }
+
+    fn pointer(entries: &[IfdEntry], tag: u16) -> u32 {
+        u32::from_le_bytes(value_of(entries, tag).try_into().unwrap())
+    }
+
+    /// `moov/uuid(Canon)` 아래에 상자들을 넣은 파일을 만듭니다.
+    fn build_cr3_with_metadata(jpeg: &[u8], metadata: &[Vec<u8>]) -> Vec<u8> {
+        let ftyp = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
+        let moov = |offset: u64| {
+            let canon = bx(b"uuid", &[&CANON_UUID[..], &metadata.concat()].concat());
+            bx(b"moov", &[canon, trak(offset, jpeg.len())].concat())
+        };
+        let offset = (ftyp.len() + moov(0).len() + 8) as u64;
+        [ftyp, moov(offset), bx(b"mdat", jpeg)].concat()
+    }
+
+    #[test]
+    fn export_merges_metadata_and_keeps_image_data_unchanged() {
+        let source = jpeg(16, 8);
+        let model = b"Canon PowerShot V1\0";
+        let date = b"2026:11:09 15:36:59\0";
+        let cmt1 = [
+            cmt1(6),
+            bx(b"CMT2", &tiff_with(0x9003, 2, date.len() as u32, date)),
+            bx(b"CMT4", &tiff_with(GPS_TAG_LATITUDE, 2, 2, b"N\0")),
+        ];
+        // CMT1은 값이 긴 태그도 다뤄야 하므로 모델명 태그를 함께 둔 파일도 확인합니다.
+        let file = build_cr3_with_metadata(&source, &cmt1);
+        let saved = export_jpeg(&mut Cursor::new(&file)).unwrap();
+
+        let tiff = exif_of(&saved);
+        let ifd0 = read_ifd(tiff).unwrap();
+        assert_eq!(value_of(&ifd0, TIFF_TAG_ORIENTATION), 6u16.to_le_bytes());
+        let tags: Vec<u16> = ifd0.iter().map(|entry| entry.tag).collect();
+        assert!(tags.windows(2).all(|pair| pair[0] < pair[1]), "{tags:?}");
+
+        let exif = ifd_at(tiff, pointer(&ifd0, TIFF_TAG_EXIF_POINTER));
+        assert_eq!(value_of(&exif, 0x9003), date);
+        let gps = ifd_at(tiff, pointer(&ifd0, TIFF_TAG_GPS_POINTER));
+        assert_eq!(value_of(&gps, GPS_TAG_LATITUDE), b"N\0");
+
+        // 이미지 데이터는 한 바이트도 바뀌지 않아야 합니다.
+        assert!(saved.ends_with(&source[2..]));
+
+        // 일반 EXIF 판독기도 같은 방향을 읽어야 합니다.
+        assert_eq!(Orientation::from_exif_chunk(tiff), Some(Orientation::Rotate90));
+
+        let long = bx(b"CMT1", &tiff_with(0x0110, 2, model.len() as u32, model));
+        let file = build_cr3_with_metadata(&source, &[long]);
+        let saved = export_jpeg(&mut Cursor::new(&file)).unwrap();
+        assert_eq!(value_of(&read_ifd(exif_of(&saved)).unwrap(), 0x0110), model);
+    }
+
+    #[test]
+    fn export_omits_gps_when_the_camera_recorded_none() {
+        let file = build_cr3_with_metadata(
+            &jpeg(8, 4),
+            &[cmt1(1), bx(b"CMT4", &tiff_with(0x0000, 1, 4, &[2, 3, 0, 0]))],
+        );
+        let saved = export_jpeg(&mut Cursor::new(&file)).unwrap();
+        let ifd0 = read_ifd(exif_of(&saved)).unwrap();
+        assert!(ifd0.iter().all(|entry| entry.tag != TIFF_TAG_GPS_POINTER));
+    }
+
+    #[test]
+    fn export_without_metadata_still_saves_the_jpeg() {
+        let source = jpeg(8, 4);
+        let file = build_cr3_with_metadata(&source, &[]);
+        assert!(export_jpeg(&mut Cursor::new(&file)).unwrap() == source);
+    }
+
+    #[test]
+    fn export_of_damaged_files_never_panics() {
+        let cmt = [cmt1(8), bx(b"CMT2", &tiff_with(0x9003, 2, 6, b"abcde\0"))];
+        let file = build_cr3_with_metadata(&jpeg(16, 8), &cmt);
+        for index in 0..file.len() {
+            for value in [0x00, 0x01, 0xff] {
+                let mut damaged = file.clone();
+                damaged[index] = value;
+                let _ = export_jpeg(&mut Cursor::new(&damaged));
             }
         }
     }

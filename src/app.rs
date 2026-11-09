@@ -1,8 +1,12 @@
 //! The egui application: state, input handling, drawing and window control.
 
+use std::fs::File;
+use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use anyhow::Context as _;
 
 use egui::{
     Align2, Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, PointerButton,
@@ -10,8 +14,11 @@ use egui::{
     TextureWrapMode, Vec2, ViewportCommand,
 };
 
+use crate::archive::{is_zip_file, Archive, ArchiveReader, ZIP_EXTENSION};
+use crate::cr3;
+use crate::gallery::Gallery;
 use crate::image_loader::{DecodedImage, ImageLoader, LoadRequest, LoadResult, Priority};
-use crate::input::{collect_actions, Action};
+use crate::input::{collect_actions, Action, WheelStepper};
 use crate::navigator::{file_name, Navigator, SUPPORTED_EXTENSIONS};
 use crate::viewport::{Viewport, ZoomMode, ZOOM_STEP};
 use crate::APP_NAME;
@@ -32,6 +39,20 @@ const SPINNER_DELAY: Duration = Duration::from_millis(150);
 const CURSOR_HIDE_AFTER: f64 = 2.0;
 /// Used until the backend reports its real texture limit.
 const FALLBACK_MAX_TEXTURE_SIDE: u32 = 8192;
+const NOTICE_DURATION: Duration = Duration::from_secs(4);
+/// 썸네일을 더블클릭하면 두 번째 클릭이 한 장 보기 화면에 떨어집니다.
+/// 이 시간 안의 더블클릭은 전체 화면 전환으로 처리하지 않습니다.
+const DOUBLE_CLICK_GUARD: Duration = Duration::from_millis(500);
+
+/// 우클릭 메뉴 항목. `None`은 구분선입니다.
+type MenuItem = Option<(String, Action)>;
+
+/// 잠시 표시했다가 사라지는 안내 문구.
+struct Notice {
+    text: String,
+    is_error: bool,
+    until: Instant,
+}
 
 struct CachedImage {
     texture: TextureHandle,
@@ -117,6 +138,11 @@ pub struct ViewerApp {
     viewport: Viewport,
     loader: ImageLoader,
     cache: TextureCache,
+    /// zip을 열었을 때만 있습니다. 이때 `navigator`는 zip 안의 가상 경로를 다룹니다.
+    gallery: Option<Gallery>,
+    notice: Option<Notice>,
+    wheel: WheelStepper,
+    entered_single_view: Option<Instant>,
     /// The image currently drawn; always present in `cache`.
     shown: Option<PathBuf>,
     /// The image the user is waiting for.
@@ -149,6 +175,10 @@ impl ViewerApp {
             viewport: Viewport::new(),
             loader: ImageLoader::spawn(ctx.clone()),
             cache: TextureCache::default(),
+            gallery: None,
+            notice: None,
+            wheel: WheelStepper::default(),
+            entered_single_view: None,
             shown: None,
             pending: None,
             generation: 0,
@@ -176,22 +206,148 @@ impl ViewerApp {
     // ----- opening and navigation -------------------------------------------------
 
     fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
+        if is_zip_file(path) {
+            self.open_archive(ctx, path);
+            return;
+        }
+        self.gallery = None;
         self.navigator.open(path);
         self.error = None;
         self.sync_target(ctx);
     }
 
+    fn open_archive(&mut self, ctx: &egui::Context, path: &Path) {
+        self.generation += 1;
+        self.gallery = None;
+        self.shown = None;
+        self.pending = None;
+        self.error = None;
+        // zip이 바뀌었어도 가상 경로는 같을 수 있으므로 옛 텍스처를 남기지 않습니다.
+        self.cache = TextureCache::default();
+
+        let failure = match Archive::open(path) {
+            Ok(archive) if !archive.entries.is_empty() => {
+                self.navigator.open_list(archive.paths());
+                self.gallery = Some(Gallery::new(ctx.clone(), Arc::new(archive), self.korean_ui));
+                return;
+            }
+            Ok(_) => self.t("이미지가 없는 zip 파일입니다", "This zip has no images").to_owned(),
+            Err(err) => format!("{err:#}"),
+        };
+        log::error!("cannot open zip {}: {failure}", path.display());
+        self.navigator.open(path);
+        self.error = Some(format!("{}\n{failure}", file_name(path)));
+    }
+
+    fn dialog_dir(&self) -> Option<&Path> {
+        match &self.gallery {
+            Some(gallery) => gallery.archive.path.parent(),
+            None => self.navigator.dir(),
+        }
+    }
+
     fn open_dialog(&mut self, ctx: &egui::Context) {
+        let mut extensions = SUPPORTED_EXTENSIONS.to_vec();
+        extensions.push(ZIP_EXTENSION);
         let mut dialog = rfd::FileDialog::new()
             .set_title(self.t("이미지 열기", "Open image"))
-            .add_filter(self.t("이미지 파일", "Image files"), SUPPORTED_EXTENSIONS)
+            .add_filter(self.t("이미지 및 zip 파일", "Images and zip files"), &extensions)
             .add_filter(self.t("모든 파일", "All files"), &["*"]);
-        if let Some(dir) = self.navigator.dir() {
+        if let Some(dir) = self.dialog_dir() {
             dialog = dialog.set_directory(dir);
         }
         if let Some(path) = dialog.pick_file() {
             self.open_path(ctx, &path);
         }
+    }
+
+    fn enter_single_view(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(gallery) = self.gallery.as_mut() else {
+            return;
+        };
+        gallery.visible = false;
+        gallery.select(index);
+        self.entered_single_view = Some(Instant::now());
+        self.navigator.select(index);
+        self.sync_target(ctx);
+    }
+
+    fn return_to_gallery(&mut self, ctx: &egui::Context) {
+        let position = self.navigator.position();
+        let Some(gallery) = self.gallery.as_mut() else {
+            return;
+        };
+        gallery.visible = true;
+        if let Some((number, _)) = position {
+            gallery.select(number - 1);
+        }
+        // 다시 들어왔을 때 창에 맞춤으로 시작하도록 표시 상태를 비웁니다.
+        self.generation += 1;
+        self.shown = None;
+        self.pending = None;
+        self.error = None;
+        ctx.request_repaint();
+    }
+
+    fn notify(&mut self, text: String, is_error: bool) {
+        self.notice = Some(Notice {
+            text,
+            is_error,
+            until: Instant::now() + NOTICE_DURATION,
+        });
+    }
+
+    fn save_cr3_jpeg(&mut self) {
+        let Some(source) = self.navigator.current().map(Path::to_path_buf) else {
+            return;
+        };
+        if !cr3::has_cr3_extension(&source) {
+            let message = self.t("CR3 파일에서만 저장할 수 있습니다", "Only CR3 files can be saved as JPEG");
+            self.notify(message.to_owned(), true);
+            return;
+        }
+
+        // 카메라가 함께 저장한 같은 이름의 JPG를 덮어쓰지 않도록 이름을 구분합니다.
+        let stem = source.file_stem().unwrap_or_default().to_string_lossy();
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(self.t("JPEG로 저장", "Save as JPEG"))
+            .set_file_name(format!("{stem}_cr3.jpg"))
+            .add_filter("JPEG", &["jpg", "jpeg"]);
+        if let Some(dir) = self.dialog_dir() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(target) = dialog.save_file() else {
+            return;
+        };
+
+        match self.write_cr3_jpeg(&source, &target) {
+            Ok(()) => {
+                let message = format!("{}: {}", self.t("저장했습니다", "Saved"), file_name(&target));
+                self.notify(message, false);
+            }
+            Err(err) => {
+                log::error!("failed to save {}: {err:#}", target.display());
+                let message = format!("{}: {err:#}", self.t("저장하지 못했습니다", "Save failed"));
+                self.notify(message, true);
+            }
+        }
+    }
+
+    fn write_cr3_jpeg(&self, source: &Path, target: &Path) -> anyhow::Result<()> {
+        let entry = self.gallery.as_ref().and_then(|g| g.archive.entry_ref(source));
+        let jpeg = match entry {
+            Some(entry) => {
+                let bytes = ArchiveReader::open(&entry.archive)?.read_entry(entry.zip_index)?;
+                cr3::export_jpeg(&mut Cursor::new(bytes))?
+            }
+            None => {
+                let file = File::open(source)
+                    .with_context(|| format!("cannot open file: {}", source.display()))?;
+                cr3::export_jpeg(&mut BufReader::new(file))?
+            }
+        };
+        std::fs::write(target, jpeg)
+            .with_context(|| format!("cannot write file: {}", target.display()))
     }
 
     fn navigate(&mut self, ctx: &egui::Context, delta: isize) {
@@ -219,13 +375,18 @@ impl ViewerApp {
                 path: target.clone(),
                 started: Instant::now(),
             });
-            self.loader.request(LoadRequest {
-                path: target,
-                generation: self.generation,
-                priority: Priority::Primary,
-                max_side: self.max_texture_side,
-            });
+            self.loader.request(self.load_request(target, Priority::Primary));
             ctx.request_repaint_after(SPINNER_DELAY);
+        }
+    }
+
+    fn load_request(&self, path: PathBuf, priority: Priority) -> LoadRequest {
+        LoadRequest {
+            entry: self.gallery.as_ref().and_then(|g| g.archive.entry_ref(&path)),
+            path,
+            generation: self.generation,
+            priority,
+            max_side: self.max_texture_side,
         }
     }
 
@@ -297,12 +458,7 @@ impl ViewerApp {
             {
                 continue;
             }
-            self.loader.request(LoadRequest {
-                path: path.to_path_buf(),
-                generation: self.generation,
-                priority: Priority::Preload,
-                max_side: self.max_texture_side,
-            });
+            self.loader.request(self.load_request(path.to_path_buf(), Priority::Preload));
             requested.push(path.to_path_buf());
         }
     }
@@ -350,23 +506,38 @@ impl ViewerApp {
                     self.sync_target(ctx);
                 }
             }
+            // 갤러리에서만 의미가 있습니다.
+            Action::Up | Action::Down | Action::Activate => {}
+            Action::SaveJpeg => self.save_cr3_jpeg(),
             Action::Fit => self.viewport.reset_fit(),
             Action::ActualSize => self.viewport.set_actual(),
             Action::ZoomIn => self.zoom(ZOOM_STEP, None, view, image_size, pixels_per_point),
             Action::ZoomOut => self.zoom(1.0 / ZOOM_STEP, None, view, image_size, pixels_per_point),
             Action::ZoomBy(factor) => self.zoom(factor, hover, view, image_size, pixels_per_point),
+            Action::Wheel(notches) => {
+                // 아래로 굴리면(음수) 다음 이미지입니다.
+                let steps = self.wheel.feed(notches);
+                if steps != 0 {
+                    self.navigate(ctx, -steps);
+                }
+            }
             Action::ToggleFullscreen => self.set_fullscreen(ctx, !self.fullscreen),
             Action::Escape => {
                 if self.fullscreen {
                     self.set_fullscreen(ctx, false);
+                } else if self.gallery.as_ref().is_some_and(|g| !g.visible) {
+                    self.return_to_gallery(ctx);
                 } else {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 }
             }
-            Action::Refresh => {
-                self.navigator.refresh();
-                self.sync_target(ctx);
-            }
+            Action::Refresh => match self.gallery.as_ref().map(|g| g.archive.path.clone()) {
+                Some(path) => self.open_archive(ctx, &path),
+                None => {
+                    self.navigator.refresh();
+                    self.sync_target(ctx);
+                }
+            },
             Action::ToggleInfo => self.show_info = !self.show_info,
         }
     }
@@ -427,8 +598,18 @@ impl ViewerApp {
             .shown
             .as_ref()
             .and_then(|p| self.cache.get(p).map(|img| (p, img)));
-        let title = match shown {
-            Some((path, img)) => {
+        let gallery_title = self.gallery.as_ref().filter(|g| g.visible).map(|gallery| {
+            format!(
+                "{} — {} {}{} — {APP_NAME}",
+                file_name(&gallery.archive.path),
+                self.t("갤러리", "Gallery"),
+                gallery.archive.entries.len(),
+                self.t("장", ""),
+            )
+        });
+        let title = match (gallery_title, shown) {
+            (Some(title), _) => title,
+            (None, Some((path, img))) => {
                 let position = self
                     .navigator
                     .position()
@@ -443,7 +624,7 @@ impl ViewerApp {
                     position,
                 )
             }
-            None => match (&self.pending, self.navigator.current()) {
+            (None, None) => match (&self.pending, self.navigator.current()) {
                 (Some(pending), _) => format!("{} — {APP_NAME}", file_name(&pending.path)),
                 (None, Some(current)) if self.error.is_some() => {
                     format!("{} — {} — {APP_NAME}", file_name(current), self.t("오류", "error"))
@@ -484,7 +665,8 @@ impl ViewerApp {
                 self.viewport.pan_by(response.drag_delta(), view, size);
             }
         }
-        if response.double_clicked() {
+        let just_entered = self.entered_single_view.is_some_and(|at| at.elapsed() < DOUBLE_CLICK_GUARD);
+        if response.double_clicked() && !just_entered {
             actions.push(Action::ToggleFullscreen);
         }
         for action in actions {
@@ -514,12 +696,110 @@ impl ViewerApp {
             self.draw_info(&painter, view, pixels_per_point);
         }
         self.draw_loading(ui, view);
+        if self.gallery.is_some() {
+            let rect = Rect::from_min_size(
+                Pos2::new(view.right() - 112.0, view.top() + 12.0),
+                Vec2::new(100.0, 30.0),
+            );
+            if ui.put(rect, egui::Button::new(self.t("← 갤러리", "← Gallery"))).clicked() {
+                self.return_to_gallery(&ctx);
+            }
+        }
+        self.draw_notice(&painter, view, &ctx);
         self.draw_drop_hint(&painter, view, &ctx);
     }
 
+    fn gallery_view(&mut self, ui: &mut egui::Ui, mut actions: Vec<Action>) {
+        let ctx = ui.ctx().clone();
+        let view = ui.max_rect();
+        let pixels_per_point = ctx.pixels_per_point();
+        let menu_was_open = egui::containers::Popup::is_any_open(&ctx);
+        let items = self.gallery_menu_items();
+
+        let background = ui.interact(view, ui.id().with("gallery"), Sense::click());
+        Self::show_context_menu(&background, &items, &mut actions);
+        let Some(gallery) = self.gallery.as_mut() else {
+            return;
+        };
+        let activated = gallery.show(ui, &mut |tile| {
+            Self::show_context_menu(tile, &items, &mut actions);
+        });
+        // 메뉴를 닫으려고 다른 칸을 클릭한 경우에는 이미지를 열지 않습니다.
+        if let Some(index) = activated.filter(|_| !menu_was_open) {
+            self.enter_single_view(&ctx, index);
+        }
+
+        for action in actions {
+            if menu_was_open && action == Action::Escape {
+                continue;
+            }
+            self.apply_in_gallery(&ctx, action, view, pixels_per_point);
+        }
+
+        let painter = ui.painter().clone();
+        self.draw_notice(&painter, view, &ctx);
+        self.draw_drop_hint(&painter, view, &ctx);
+    }
+
+    fn apply_in_gallery(
+        &mut self,
+        ctx: &egui::Context,
+        action: Action,
+        view: Rect,
+        pixels_per_point: f32,
+    ) {
+        // 앞선 동작으로 다른 파일을 열었거나 한 장 보기로 넘어갔을 수 있습니다.
+        let Some(gallery) = self.gallery.as_mut().filter(|g| g.visible) else {
+            // 같은 프레임의 휠은 갤러리 스크롤이었으므로 이미지를 넘기지 않습니다.
+            if !matches!(action, Action::Wheel(_)) {
+                self.apply(ctx, action, view, None, None, pixels_per_point);
+            }
+            return;
+        };
+        match action {
+            Action::Next => gallery.move_selection(1),
+            Action::Prev => gallery.move_selection(-1),
+            Action::Up => gallery.move_rows(-1),
+            Action::Down => gallery.move_rows(1),
+            Action::First => gallery.select(0),
+            Action::Last => gallery.select(usize::MAX),
+            Action::Activate => {
+                let index = gallery.selected();
+                self.enter_single_view(ctx, index);
+            }
+            // 한 장 보기 전용 동작입니다. 갤러리의 휠은 스크롤 영역이 처리합니다.
+            Action::SaveJpeg | Action::ToggleInfo | Action::Wheel(_) => {}
+            other => self.apply(ctx, other, view, None, None, pixels_per_point),
+        }
+    }
+
+    fn gallery_menu_items(&self) -> Vec<MenuItem> {
+        vec![
+            Some((format!("{}   Ctrl+O", self.t("열기...", "Open...")), Action::Open)),
+            Some((format!("{}   Enter", self.t("선택한 이미지 보기", "View selected image")), Action::Activate)),
+            None,
+            Some((format!("{}   F11", self.t("전체 화면", "Fullscreen")), Action::ToggleFullscreen)),
+            Some((format!("{}   F5", self.t("zip 다시 읽기", "Reload zip")), Action::Refresh)),
+            None,
+            Some((format!("{}   Esc", self.t("종료", "Quit")), Action::Escape)),
+        ]
+    }
+
     fn context_menu(&self, response: &egui::Response, actions: &mut Vec<Action>) {
+        // 저장은 CR3를 보고 있을 때만 메뉴에 나타납니다.
+        let save_item = self
+            .navigator
+            .current()
+            .filter(|path| cr3::has_cr3_extension(path))
+            .map(|_| (format!("{}   Ctrl+S", self.t("JPEG로 저장...", "Save as JPEG...")), Action::SaveJpeg));
+        let (refresh_item, last_item) = if self.gallery.is_some() {
+            (self.t("zip 다시 읽기", "Reload zip"), self.t("갤러리로 돌아가기", "Back to gallery"))
+        } else {
+            (self.t("폴더 새로 고침", "Refresh folder"), self.t("종료", "Quit"))
+        };
+
         // `None` is a separator.
-        let items: Vec<Option<(String, Action)>> = vec![
+        let mut items: Vec<MenuItem> = vec![
             Some((format!("{}   Ctrl+O", self.t("열기...", "Open...")), Action::Open)),
             None,
             Some((format!("{}   ←", self.t("이전 이미지", "Previous image")), Action::Prev)),
@@ -532,12 +812,19 @@ impl ViewerApp {
             None,
             Some((format!("{}   F11", self.t("전체 화면", "Fullscreen")), Action::ToggleFullscreen)),
             Some((format!("{}   I", self.t("정보 표시", "Show info")), Action::ToggleInfo)),
-            Some((format!("{}   F5", self.t("폴더 새로 고침", "Refresh folder")), Action::Refresh)),
+            Some((format!("{refresh_item}   F5"), Action::Refresh)),
             None,
-            Some((format!("{}   Esc", self.t("종료", "Quit")), Action::Escape)),
+            Some((format!("{last_item}   Esc"), Action::Escape)),
         ];
+        if save_item.is_some() {
+            items.insert(1, save_item);
+        }
+        Self::show_context_menu(response, &items, actions);
+    }
+
+    fn show_context_menu(response: &egui::Response, items: &[MenuItem], actions: &mut Vec<Action>) {
         response.context_menu(|ui| {
-            for item in &items {
+            for item in items {
                 match item {
                     None => {
                         ui.separator();
@@ -551,6 +838,28 @@ impl ViewerApp {
                 }
             }
         });
+    }
+
+    fn draw_notice(&mut self, painter: &egui::Painter, view: Rect, ctx: &egui::Context) {
+        let Some(notice) = &self.notice else {
+            return;
+        };
+        let remaining = notice.until.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            self.notice = None;
+            return;
+        }
+        ctx.request_repaint_after(remaining);
+
+        let color = if notice.is_error { ERROR } else { TEXT };
+        let galley = painter.layout_no_wrap(notice.text.clone(), FontId::proportional(14.0), color);
+        let rect = Rect::from_center_size(
+            Pos2::new(view.center().x, view.bottom() - 40.0),
+            galley.size() + Vec2::new(28.0, 16.0),
+        );
+        painter.rect_filled(rect, CornerRadius::same(6), PANEL);
+        let position = rect.center() - galley.size() / 2.0;
+        painter.galley(position, galley, color);
     }
 
     fn draw_error(&self, painter: &egui::Painter, view: Rect, message: &str) {
@@ -716,7 +1025,13 @@ impl eframe::App for ViewerApp {
         let actions = ctx.input(collect_actions);
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(BG))
-            .show(ui, |ui| self.canvas(ui, actions));
+            .show(ui, |ui| {
+                if self.gallery.as_ref().is_some_and(|g| g.visible) {
+                    self.gallery_view(ui, actions);
+                } else {
+                    self.canvas(ui, actions);
+                }
+            });
         self.update_title(&ctx);
         self.update_cursor(&ctx);
     }

@@ -6,10 +6,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod archive;
 mod cr3;
+mod gallery;
 mod image_loader;
 mod input;
 mod navigator;
+mod thumbnails;
 mod viewport;
 
 use std::path::PathBuf;
