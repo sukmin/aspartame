@@ -1,0 +1,36 @@
+[package]
+name = "aspartame"
+version = "0.1.0"
+edition = "2021"
+description = "Aspartame - a lightweight image viewer for Windows 11"
+build = "build.rs"
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+image = "0.25.10"
+rfd = "0.17.2"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+
+[build-dependencies]
+winresource = "0.1.31"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+# Image decoding is painfully slow in unoptimized builds, so optimize
+# dependencies even for `cargo run` while keeping our own crate debuggable.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[package.metadata.winresource]
+ProductName = "Aspartame"
+FileDescription = "Aspartame Image Viewer"

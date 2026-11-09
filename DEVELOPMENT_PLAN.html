@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aspartame 이미지 뷰어 개발 계획</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --text: #1f2328;
+    --muted: #59636e;
+    --border: #d9dde2;
+    --accent: #b7410e;
+    --accent-soft: #fdeee4;
+    --code-bg: #f0f1f3;
+    --th-bg: #f2f3f5;
+    --row-alt: #fafafa;
+    --check: #2f8f4e;
+    --sidebar-w: 260px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141618;
+      --surface: #1c1f22;
+      --text: #e6e8ea;
+      --muted: #9aa3ad;
+      --border: #30353b;
+      --accent: #f0865a;
+      --accent-soft: #33241c;
+      --code-bg: #24282c;
+      --th-bg: #24282c;
+      --row-alt: #1f2225;
+      --check: #5fbf7d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Pretendard", "Malgun Gothic", "맑은 고딕", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.7;
+  }
+  .layout { display: flex; min-height: 100vh; }
+  nav.toc {
+    width: var(--sidebar-w);
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+  nav.toc .brand {
+    font-weight: 700;
+    font-size: 15px;
+    color: var(--accent);
+    letter-spacing: .02em;
+    margin-bottom: 14px;
+  }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; }
+  nav.toc li { margin: 2px 0; }
+  nav.toc a {
+    display: block;
+    padding: 5px 10px;
+    border-radius: 6px;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 14px;
+  }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+  nav.toc ol ol { margin-left: 12px; }
+  nav.toc ol ol a { font-size: 13px; padding: 3px 10px; }
+  main {
+    flex: 1;
+    min-width: 0;
+    padding: 40px clamp(20px, 5vw, 72px) 96px;
+    max-width: 980px;
+  }
+  header.title {
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 18px;
+    margin-bottom: 36px;
+  }
+  header.title h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.25; }
+  header.title .sub { color: var(--muted); font-size: 15px; }
+  header.title .meta { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  section { margin-bottom: 52px; }
+  h2 {
+    font-size: 24px;
+    margin: 0 0 18px;
+    padding-top: 8px;
+    scroll-margin-top: 24px;
+  }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 {
+    font-size: 18px;
+    margin: 28px 0 10px;
+    scroll-margin-top: 24px;
+  }
+  p { margin: 0 0 12px; }
+  ul, ol.plain { padding-left: 22px; margin: 0 0 14px; }
+  li { margin: 4px 0; }
+  strong { font-weight: 700; }
+  code {
+    font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    font-size: .9em;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin: 0 0 16px;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0 0 18px;
+    font-size: 14.5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .table-wrap { overflow-x: auto; margin-bottom: 18px; }
+  .table-wrap table { margin-bottom: 0; }
+  th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+  th { background: var(--th-bg); font-weight: 700; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  td.center, th.center { text-align: center; }
+  td.nowrap { white-space: nowrap; }
+  .pick { color: var(--check); font-weight: 700; }
+  .hold { color: var(--muted); }
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 0 0 16px;
+    font-size: 15px;
+  }
+  .callout.info { border-color: var(--muted); background: var(--code-bg); }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 0 0 18px;
+  }
+  .card h3 { margin-top: 0; }
+  .card .days {
+    float: right;
+    font-size: 13px;
+    color: var(--muted);
+    background: var(--code-bg);
+    padding: 2px 10px;
+    border-radius: 999px;
+  }
+  ul.check { list-style: none; padding-left: 0; }
+  ul.check li { padding-left: 28px; position: relative; }
+  ul.check li::before {
+    content: "";
+    position: absolute;
+    left: 4px; top: 8px;
+    width: 14px; height: 14px;
+    border: 2px solid var(--muted);
+    border-radius: 4px;
+  }
+  .done {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--code-bg);
+    border-radius: 6px;
+    font-size: 14.5px;
+  }
+  .done b { color: var(--check); }
+  kbd {
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: .85em;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 60px; border-top: 1px solid var(--border); padding-top: 16px; }
+  a { color: var(--accent); }
+  @media (max-width: 860px) {
+    .layout { display: block; }
+    nav.toc { position: static; width: auto; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 24px 18px 64px; }
+  }
+  @media print {
+    nav.toc { display: none; }
+    main { max-width: none; padding: 0; }
+    body { background: #fff; color: #000; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <div class="brand">Aspartame 개발 계획</div>
+  <ol>
+    <li><a href="#status">0. 구현 현황</a></li>
+    <li><a href="#overview">1. 프로젝트 개요</a></li>
+    <li><a href="#req">2. 요구사항</a>
+      <ol>
+        <li><a href="#req-must">필수 기능 (MVP)</a></li>
+        <li><a href="#req-opt">선택 기능</a></li>
+        <li><a href="#req-nf">비기능 요구사항</a></li>
+      </ol>
+    </li>
+    <li><a href="#stack">3. 기술 스택</a>
+      <ol>
+        <li><a href="#stack-gui">GUI 프레임워크 선정</a></li>
+        <li><a href="#stack-crates">주요 크레이트</a></li>
+      </ol>
+    </li>
+    <li><a href="#arch">4. 아키텍처 설계</a>
+      <ol>
+        <li><a href="#arch-fit">Fit to Window 계산식</a></li>
+        <li><a href="#arch-hidpi">HiDPI 처리</a></li>
+        <li><a href="#arch-nav">좌우 방향키 폴더 탐색</a></li>
+      </ol>
+    </li>
+    <li><a href="#phases">5. 단계별 개발 계획</a></li>
+    <li><a href="#schedule">6. 일정 요약</a></li>
+    <li><a href="#keys">7. 조작 정의</a></li>
+    <li><a href="#test">8. 테스트 계획</a></li>
+    <li><a href="#build">9. 빌드와 배포</a></li>
+    <li><a href="#risk">10. 리스크와 대응</a></li>
+    <li><a href="#ref">11. 참고 자료</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="title">
+  <h1>Aspartame 이미지 뷰어 개발 계획</h1>
+  <div class="sub">Windows 11용 경량 이미지 뷰어를 Rust로 직접 만들기 위한 개발 계획서</div>
+  <div class="meta">
+    <span class="tag">Rust</span>
+    <span class="tag">egui / eframe</span>
+    <span class="tag">Windows 11</span>
+    <span class="tag">작성일 2026-09-13</span>
+  </div>
+</header>
+
+<!-- 0 -->
+<section id="status">
+  <h2><span class="num">0.</span>구현 현황 <span class="tag" style="vertical-align:middle;font-size:12px;">2026-09-13</span></h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>항목</th><th>상태</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">Phase 0 ~ 5 소스 코드</td><td>작성 완료 (<code>src/</code> 6개 모듈, <code>Cargo.toml</code>, <code>build.rs</code>, <code>assets/icon.*</code>)</td></tr>
+      <tr><td class="nowrap">채택 버전</td><td>eframe/egui 0.36.2, image 0.25.10, rfd 0.17.2, winresource 0.1.31</td></tr>
+      <tr><td class="nowrap">로컬 빌드</td><td><strong>완료</strong>. Smart App Control 해제 후 <code>cargo build --release</code> 성공 (경고 0). 이전에는 SAC가 <code>cargo.exe</code>를 차단했음</td></tr>
+      <tr><td class="nowrap">단위 테스트</td><td><code>cargo test</code> 14개 통과 (navigator 8, viewport 6)</td></tr>
+      <tr><td class="nowrap">실행 검증</td><td>릴리스 exe로 이름순 이동·순환, 실제 크기, 창 맞춤, Home/End, 전체 화면, 손상 파일 오류 표시, 정보 오버레이, 한글 메뉴를 창 제목과 화면 캡처로 확인</td></tr>
+      <tr><td class="nowrap">O-08 파일 연결</td><td><code>scripts\register-default-viewer.bat</code> / <code>unregister-default-viewer.bat</code> 작성, 등록·해제 검증 완료</td></tr>
+      <tr><td class="nowrap">패키징</td><td><code>scripts\package.bat</code> → <code>dist\Aspartame\</code> (exe, bat 2개, 사용법.txt, README.md) 및 <code>dist\Aspartame-0.1.0-win64.zip</code> 생성 완료</td></tr>
+      <tr><td class="nowrap">사용법</td><td><code>README.md</code> 참고</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout info">
+    eframe 0.36부터 <code>App::update</code>가 <code>App::ui(&amp;mut Ui, &amp;mut Frame)</code> + <code>App::logic(&amp;Context, &amp;mut Frame)</code>으로 바뀌었고,
+    <code>CentralPanel::show</code>가 <code>&amp;Context</code> 대신 <code>&amp;mut Ui</code>를 받습니다. 4장 설계의 <code>update()</code> 표기는 이 두 메서드로 읽으면 됩니다.
+  </div>
+</section>
+
+<!-- 1 -->
+<section id="overview">
+  <h2><span class="num">1.</span>프로젝트 개요</h2>
+
+  <h3>1.1 목표</h3>
+  <ul>
+    <li>대중적인 이미지 포맷(PNG, JPEG, BMP, GIF, WebP, TIFF 등)을 빠르게 열어 볼 수 있는 Windows 11 데스크톱 뷰어를 만든다.</li>
+    <li>핵심 기능 두 가지를 반드시 제공한다.
+      <ol class="plain">
+        <li><strong>창 크기에 꽉 차게 보기(Fit to Window)</strong></li>
+        <li><strong>좌우 방향키로 같은 폴더 안의 이미지를 이름순으로 이동</strong></li>
+      </ol>
+    </li>
+    <li>실행 파일 하나로 배포되는 가볍고 빠른 프로그램을 지향한다.</li>
+    <li>개인 사용이 1차 목표이므로 기능은 최소한으로 시작하고, 필요할 때 점진적으로 확장한다.</li>
+  </ul>
+
+  <h3>1.2 비목표 (이번 버전에서 하지 않는 것)</h3>
+  <ul>
+    <li>이미지 편집(자르기, 색 보정, 필터 등)</li>
+    <li>RAW 카메라 포맷 지원</li>
+    <li>클라우드 연동, 썸네일 데이터베이스, 태그/앨범 관리</li>
+    <li>macOS / Linux 지원 (Rust 특성상 나중에 쉽게 확장 가능하지만 이번엔 Windows만 검증)</li>
+  </ul>
+</section>
+
+<!-- 2 -->
+<section id="req">
+  <h2><span class="num">2.</span>요구사항</h2>
+
+  <h3 id="req-must">2.1 필수 기능 (MVP)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>번호</th><th>기능</th><th>설명</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">F-01</td><td class="nowrap">이미지 열기</td><td>파일 열기 대화상자, 드래그 앤 드롭, 명령줄 인자(<code>viewer.exe image.png</code>)로 열기</td></tr>
+      <tr><td class="nowrap">F-02</td><td class="nowrap">포맷 지원</td><td>PNG, JPEG, BMP, GIF(첫 프레임), WebP, TIFF, ICO, TGA</td></tr>
+      <tr><td class="nowrap">F-03</td><td class="nowrap"><strong>창에 꽉 차게 보기</strong></td><td>이미지 비율을 유지하면서 창 안에 최대 크기로 표시. 창 크기가 바뀌면 자동으로 다시 맞춤</td></tr>
+      <tr><td class="nowrap">F-04</td><td class="nowrap">실제 크기 보기</td><td>100% 배율로 표시 (<kbd>1</kbd> 키)</td></tr>
+      <tr><td class="nowrap">F-05</td><td class="nowrap">확대/축소</td><td>마우스 휠, <kbd>+</kbd>/<kbd>-</kbd> 키. 마우스 커서 위치를 기준으로 확대</td></tr>
+      <tr><td class="nowrap">F-06</td><td class="nowrap">이동(Pan)</td><td>확대 상태에서 마우스 드래그로 이미지 이동</td></tr>
+      <tr><td class="nowrap">F-07</td><td class="nowrap"><strong>좌우 방향키로 폴더 내 이동</strong></td><td><kbd>←</kbd>/<kbd>→</kbd> 키로 같은 폴더의 이전/다음 이미지로 이동. 순서는 <strong>파일 이름순 정렬</strong>. <kbd>PageUp</kbd>/<kbd>PageDown</kbd>도 동일 동작</td></tr>
+      <tr><td class="nowrap">F-08</td><td class="nowrap">전체 화면</td><td><kbd>F11</kbd> 또는 더블클릭으로 전체 화면 전환</td></tr>
+      <tr><td class="nowrap">F-09</td><td class="nowrap">정보 표시</td><td>제목 표시줄에 파일명, 해상도, 배율(%) 표시</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="req-opt">2.2 선택 기능 (MVP 이후)</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>번호</th><th>기능</th><th>우선순위</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">O-01</td><td>회전(90°) / 좌우 반전</td><td>높음</td></tr>
+      <tr><td class="nowrap">O-02</td><td>GIF/WebP 애니메이션 재생</td><td>중간</td></tr>
+      <tr><td class="nowrap">O-03</td><td>파일 삭제(휴지통으로 이동), 이름 바꾸기</td><td>중간</td></tr>
+      <tr><td class="nowrap">O-04</td><td>슬라이드쇼</td><td>낮음</td></tr>
+      <tr><td class="nowrap">O-05</td><td>EXIF 정보 패널, EXIF 방향 자동 적용</td><td>중간</td></tr>
+      <tr><td class="nowrap">O-06</td><td>배경색 선택(검정/회색/체커보드)</td><td>낮음</td></tr>
+      <tr><td class="nowrap">O-07</td><td>다크/라이트 테마</td><td>낮음</td></tr>
+      <tr><td class="nowrap">O-08</td><td>Windows 파일 연결(기본 앱으로 등록)</td><td>높음</td></tr>
+      <tr><td class="nowrap">O-09</td><td>설정 저장(마지막 창 위치, 기본 배경색 등)</td><td>중간</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 id="req-nf">2.3 비기능 요구사항</h3>
+  <ul>
+    <li><strong>시작 속도</strong>: 실행 후 첫 이미지가 화면에 나오기까지 0.5초 이내 (일반 수천만 화소 JPEG 기준)</li>
+    <li><strong>메모리</strong>: 열린 이미지 한 장 + 앞뒤 프리로드 캐시 최대 2장 이내로 유지</li>
+    <li><strong>HiDPI</strong>: Windows 배율(125%, 150% 등)에서 흐릿하지 않게 표시</li>
+    <li><strong>단일 실행 파일</strong>: 외부 DLL 없이 <code>.exe</code> 하나로 실행</li>
+    <li><strong>콘솔 창 없음</strong>: 실행 시 검은 콘솔 창이 뜨지 않도록 GUI 서브시스템 사용</li>
+  </ul>
+</section>
+
+<!-- 3 -->
+<section id="stack">
+  <h2><span class="num">3.</span>기술 스택</h2>
+
+  <h3>3.1 언어 및 도구</h3>
+  <ul>
+    <li><strong>언어</strong>: Rust (stable, edition 2021 이상)</li>
+    <li><strong>툴체인</strong>: <code>x86_64-pc-windows-msvc</code> (Visual Studio Build Tools 필요)</li>
+    <li><strong>빌드</strong>: Cargo</li>
+    <li><strong>에디터</strong>: VS Code + rust-analyzer 권장</li>
+  </ul>
+
+  <h3 id="stack-gui">3.2 GUI 프레임워크 선정</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>후보</th><th>장점</th><th>단점</th><th>판단</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><strong>egui + eframe</strong></td><td>즉시 모드로 코드가 단순, 이미지 텍스처 표시가 쉬움, 문서와 예제가 풍부, wgpu/glow 백엔드로 GPU 렌더링</td><td>네이티브 룩앤필은 아님</td><td class="pick">채택</td></tr>
+      <tr><td class="nowrap">iced</td><td>Elm 스타일로 구조가 깔끔, 성숙한 위젯</td><td>학습 곡선이 상대적으로 높고 커스텀 이미지 뷰포트 구현이 다소 번거로움</td><td class="hold">보류</td></tr>
+      <tr><td class="nowrap">slint</td><td>네이티브에 가까운 UI, 디자이너 친화적</td><td>별도 마크업 언어 학습 필요</td><td class="hold">보류</td></tr>
+      <tr><td class="nowrap">winit + softbuffer/pixels</td><td>의존성 최소, 완전한 제어</td><td>UI 요소(메뉴, 대화상자)를 전부 직접 구현해야 함</td><td class="hold">보류</td></tr>
+      <tr><td class="nowrap">Tauri</td><td>웹 기술로 UI 구성</td><td>WebView 의존, 대용량 이미지 전달 비효율</td><td class="hold">제외</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout">
+    <strong>선정 이유</strong>: 이미지 뷰어는 UI가 단순하고 "이미지 한 장을 원하는 배율과 위치로 그리는 것"이 핵심입니다. egui는 이미지를 텍스처로 올려 원하는 사각형에 그리는 API가 간단하고, 키보드/마우스 입력 처리와 창 제어(전체 화면, 제목 변경)를 eframe이 제공하므로 가장 빠르게 결과를 볼 수 있습니다.
+  </div>
+
+  <h3 id="stack-crates">3.3 주요 크레이트</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>크레이트</th><th>용도</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><code>eframe</code> / <code>egui</code></td><td>창 생성, 렌더링, 입력 처리</td><td>wgpu 백엔드 권장</td></tr>
+      <tr><td class="nowrap"><code>image</code></td><td>이미지 디코딩</td><td>PNG, JPEG, BMP, GIF, WebP, TIFF, ICO, TGA 등 기본 지원</td></tr>
+      <tr><td class="nowrap"><code>rfd</code></td><td>네이티브 파일 열기 대화상자</td><td>Windows 공용 대화상자 사용</td></tr>
+      <tr><td class="nowrap"><code>anyhow</code></td><td>에러 처리 단순화</td><td></td></tr>
+      <tr><td class="nowrap"><code>log</code> + <code>env_logger</code></td><td>로깅</td><td>디버깅용</td></tr>
+      <tr><td class="nowrap"><code>trash</code></td><td>파일을 휴지통으로 이동</td><td>선택 기능</td></tr>
+      <tr><td class="nowrap"><code>kamadak-exif</code></td><td>EXIF 읽기</td><td>선택 기능</td></tr>
+      <tr><td class="nowrap"><code>winresource</code> 또는 <code>winres</code></td><td>실행 파일 아이콘/버전 정보 삽입</td><td>build.rs에서 사용</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout info">버전은 착수 시점에 crates.io에서 최신 안정 버전을 확인해 고정합니다.</div>
+
+  <h3>3.4 Cargo.toml 초안</h3>
+<pre><code>[package]
+name = "aspartame"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = { version = "*", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "*"
+image = "*"
+rfd = "*"
+anyhow = "*"
+log = "*"
+env_logger = "*"
+
+[build-dependencies]
+winresource = "*"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true</code></pre>
+  <p class="hold"><code>"*"</code> 자리는 착수 시 실제 버전으로 교체합니다.</p>
+</section>
+
+<!-- 4 -->
+<section id="arch">
+  <h2><span class="num">4.</span>아키텍처 설계</h2>
+
+  <h3>4.1 모듈 구조</h3>
+<pre><code>aspartame/
+├── Cargo.toml
+├── build.rs              # 아이콘, 버전 리소스 삽입
+├── assets/
+│   └── icon.ico
+└── src/
+    ├── main.rs           # 진입점, 명령줄 인자 처리, eframe 실행
+    ├── app.rs            # ViewerApp: egui 상태 및 update 루프
+    ├── image_loader.rs   # 파일 → RGBA 버퍼 디코딩 (백그라운드 스레드)
+    ├── navigator.rs      # 폴더 스캔, 이전/다음 파일 탐색
+    ├── viewport.rs       # 배율/오프셋 계산, Fit/실제 크기/줌 로직
+    ├── input.rs          # 키보드/마우스 입력 → 액션 매핑
+    └── config.rs         # 설정 저장/불러오기 (선택)</code></pre>
+
+  <h3>4.2 핵심 데이터 구조</h3>
+<pre><code>/// 디코딩된 이미지
+pub struct LoadedImage {
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub texture: egui::TextureHandle,   // GPU에 올라간 텍스처
+}
+
+/// 화면 표시 상태
+pub enum ZoomMode {
+    FitToWindow,     // 창에 꽉 차게 (기본값)
+    ActualSize,      // 100%
+    Custom(f32),     // 사용자가 휠/키로 조정한 배율
+}
+
+pub struct Viewport {
+    pub mode: ZoomMode,
+    pub scale: f32,          // 실제 적용 중인 배율
+    pub offset: egui::Vec2,  // 팬 오프셋 (화면 픽셀 단위)
+}
+
+/// 앱 전체 상태
+pub struct ViewerApp {
+    pub current: Option&lt;LoadedImage&gt;,
+    pub navigator: Navigator,        // 폴더 내 파일 목록과 현재 인덱스
+    pub viewport: Viewport,
+    pub fullscreen: bool,
+    pub loader_rx: Receiver&lt;LoadResult&gt;,  // 백그라운드 로더 결과 수신
+    pub error: Option&lt;String&gt;,
+}</code></pre>
+
+  <h3>4.3 데이터 흐름</h3>
+<pre><code>[명령줄 인자 / 드롭 / 열기 대화상자]
+            │
+            ▼
+   Navigator::open(path)  ── 폴더 스캔 → 정렬된 이미지 파일 목록
+            │
+            ▼
+   ImageLoader (별도 스레드) ── image 크레이트로 디코딩 → RGBA8
+            │  채널(mpsc)로 전달
+            ▼
+   ViewerApp::update()
+            ├─ 텍스처 업로드 (ctx.load_texture)
+            ├─ Viewport::compute(창 크기, 이미지 크기, 모드) → 그릴 사각형
+            ├─ 입력 처리 (휠/키/드래그) → 모드·배율·오프셋 갱신
+            └─ egui Painter로 이미지 그리기 + 제목 표시줄 갱신</code></pre>
+
+  <h3 id="arch-fit">4.4 "창에 꽉 차게 보기" 계산식</h3>
+  <p>창 내부 영역이 <code>W × H</code>, 이미지가 <code>w × h</code>일 때:</p>
+<pre><code>scale = min(W / w, H / h)
+draw_w = w * scale
+draw_h = h * scale
+x = (W - draw_w) / 2
+y = (H - draw_h) / 2</code></pre>
+  <ul>
+    <li>이미지가 창보다 작아도 확대해서 꽉 채운다. (원하면 "확대 금지" 옵션으로 <code>scale = min(scale, 1.0)</code> 적용)</li>
+    <li><code>FitToWindow</code> 모드에서는 창 크기가 바뀔 때마다 매 프레임 재계산하므로 자동으로 따라간다.</li>
+    <li>사용자가 휠로 줌하면 <code>Custom(scale)</code> 모드로 전환되고, <kbd>F</kbd> 키 또는 메뉴로 다시 <code>FitToWindow</code>로 복귀한다.</li>
+  </ul>
+
+  <h3>4.5 커서 기준 확대 계산식</h3>
+  <p>마우스 위치 <code>m</code>(화면 좌표)를 기준으로 배율을 <code>s0 → s1</code>으로 바꿀 때, 커서 아래 이미지 픽셀이 그대로 있으려면:</p>
+<pre><code>offset1 = m - (m - offset0) * (s1 / s0)</code></pre>
+
+  <h3 id="arch-hidpi">4.6 HiDPI 처리</h3>
+  <ul>
+    <li>eframe은 <code>ctx.pixels_per_point()</code>로 DPI 배율을 제공한다.</li>
+    <li>"실제 크기(100%)"는 <strong>물리 픽셀 기준</strong>으로 정의한다. 즉 논리 좌표에서는 <code>1 / pixels_per_point</code> 배율로 그려야 이미지 픽셀 1개 = 모니터 픽셀 1개가 된다.</li>
+    <li>텍스처 필터: 확대 시 <code>Linear</code>, 100% 또는 정수 배율일 때는 <code>Nearest</code>도 선택 가능하게 한다.</li>
+  </ul>
+
+  <h3 id="arch-nav">4.7 좌우 방향키 폴더 탐색 설계</h3>
+  <p><code>navigator.rs</code>가 담당하며, 동작 규칙은 다음과 같다.</p>
+
+  <p><strong>목록 구성</strong></p>
+  <ol class="plain">
+    <li>이미지를 열면 그 파일이 속한 폴더를 한 번 스캔한다. (하위 폴더는 포함하지 않음)</li>
+    <li>지원 확장자(<code>png, jpg, jpeg, bmp, gif, webp, tif, tiff, ico, tga</code>)만 남긴다. 확장자 비교는 대소문자 무시.</li>
+    <li><strong>파일 이름순으로 정렬</strong>한다.
+      <ul>
+        <li>대소문자를 구분하지 않는다. (<code>a.png</code>와 <code>B.png</code>는 <code>a</code>, <code>B</code> 순)</li>
+        <li>이름에 포함된 숫자는 자연 정렬(natural sort)로 비교해 <code>img2.png</code> → <code>img10.png</code> 순서가 되도록 한다. Windows 탐색기의 기본 이름순과 동일한 결과를 목표로 한다.</li>
+        <li>한글 파일명은 유니코드 코드포인트 순으로 비교하면 가나다순이 된다.</li>
+      </ul>
+    </li>
+    <li>현재 열린 파일의 인덱스를 찾아 <code>current_index</code>로 저장한다.</li>
+  </ol>
+
+  <p><strong>이동 규칙</strong></p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>입력</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><kbd>→</kbd>, <kbd>PageDown</kbd></td><td><code>current_index + 1</code> 파일로 이동</td></tr>
+      <tr><td class="nowrap"><kbd>←</kbd>, <kbd>PageUp</kbd></td><td><code>current_index - 1</code> 파일로 이동</td></tr>
+      <tr><td class="nowrap"><kbd>Home</kbd> / <kbd>End</kbd></td><td>첫 / 마지막 파일로 이동</td></tr>
+      <tr><td class="nowrap">마지막에서 <kbd>→</kbd></td><td>첫 파일로 순환 (설정으로 순환 끄기 가능, 기본은 순환)</td></tr>
+      <tr><td class="nowrap">첫 파일에서 <kbd>←</kbd></td><td>마지막 파일로 순환</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <ul>
+    <li>이동 직후 줌 모드는 <code>FitToWindow</code>로 초기화한다. 즉, 방향키만 눌러도 매번 창에 꽉 찬 상태로 다음 이미지를 본다.</li>
+    <li>이동 중 방향키를 연타하면 이전 로딩 요청은 무시하고 마지막 요청만 반영한다. (로더 결과에 요청 세대 번호를 붙여 오래된 결과를 버림)</li>
+    <li>폴더에 이미지가 1개뿐이면 방향키는 아무 동작도 하지 않는다.</li>
+  </ul>
+
+  <p><strong>목록 갱신</strong></p>
+  <ul>
+    <li>이동할 파일이 삭제되어 없으면 목록을 다시 스캔하고 가장 가까운 인덱스로 이동한다.</li>
+    <li>폴더에 파일이 새로 추가된 경우는 <kbd>F5</kbd>로 수동 재스캔한다. (파일 시스템 감시는 선택 기능으로 미룸)</li>
+  </ul>
+
+  <p><strong>정렬 예시</strong></p>
+<pre><code>입력 폴더:  photo10.jpg, Photo2.jpg, photo1.jpg, 가.png, readme.txt, b.PNG
+정렬 결과:  b.PNG, photo1.jpg, Photo2.jpg, photo10.jpg, 가.png
+            (readme.txt는 제외)</code></pre>
+</section>
+
+<!-- 5 -->
+<section id="phases">
+  <h2><span class="num">5.</span>단계별 개발 계획</h2>
+
+  <div class="card">
+    <h3>Phase 0. 환경 준비 <span class="days">0.5일</span></h3>
+    <ul class="check">
+      <li>Rust 툴체인 설치 (<code>rustup</code>, MSVC 타깃)</li>
+      <li>Visual Studio Build Tools 설치 (C++ 데스크톱 워크로드)</li>
+      <li><code>cargo new aspartame</code> 후 eframe 예제 창 띄우기</li>
+      <li><code>#![windows_subsystem = "windows"]</code> 적용해 콘솔 창 제거 확인</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Phase 1. 이미지 한 장 띄우기 <span class="days">1일</span></h3>
+    <ul class="check">
+      <li><code>image</code> 크레이트로 PNG/JPEG 디코딩 → <code>ColorImage</code> → 텍스처 업로드</li>
+      <li>명령줄 인자로 받은 파일을 시작 시 열기</li>
+      <li><strong>Fit to Window</strong> 계산식 구현, 창 리사이즈 시 자동 재맞춤 확인</li>
+      <li>제목 표시줄에 <code>파일명 — 1920×1080 — 67%</code> 형식 표시</li>
+    </ul>
+    <div class="done"><b>완료 기준</b>: <code>aspartame.exe photo.jpg</code> 실행 시 창에 꽉 찬 사진이 나오고, 창 크기를 바꿔도 비율을 유지하며 따라온다.</div>
+  </div>
+
+  <div class="card">
+    <h3>Phase 2. 줌 / 팬 / 실제 크기 <span class="days">1일</span></h3>
+    <ul class="check">
+      <li>마우스 휠 줌 (커서 기준), <kbd>+</kbd>/<kbd>-</kbd> 키 줌</li>
+      <li>드래그 팬, 이미지가 창보다 작을 땐 중앙 고정</li>
+      <li><kbd>1</kbd> 키: 실제 크기, <kbd>F</kbd> 키: 창에 맞춤 토글</li>
+      <li>HiDPI 환경에서 100% 배율 검증 (150% 배율 모니터에서 테스트)</li>
+      <li>최소/최대 배율 제한 (예: 1% ~ 3200%)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Phase 3. 좌우 방향키 폴더 탐색과 파일 열기 <span class="days">1일</span></h3>
+    <ul class="check">
+      <li>열린 파일의 폴더를 스캔해 지원 확장자만 <strong>이름순(대소문자 무시, 자연 정렬)</strong>으로 목록화</li>
+      <li><kbd>←</kbd>/<kbd>→</kbd>로 이전/다음 이미지 이동, <kbd>PageUp</kbd>/<kbd>PageDown</kbd>, <kbd>Home</kbd>/<kbd>End</kbd> 지원</li>
+      <li>끝에서 순환 이동, 이미지 1개일 때 무동작 처리</li>
+      <li>방향키 연타 시 마지막 요청만 반영 (요청 세대 번호)</li>
+      <li>이동 후 줌 모드를 <code>FitToWindow</code>로 초기화</li>
+      <li>이동 대상 파일이 사라졌을 때 재스캔 후 인접 파일로 이동, <kbd>F5</kbd> 수동 재스캔</li>
+      <li><kbd>Ctrl+O</kbd> 파일 열기 대화상자 (<code>rfd</code>)</li>
+      <li>드래그 앤 드롭으로 열기 (<code>ctx.input(|i| i.raw.dropped_files)</code>)</li>
+    </ul>
+    <div class="done"><b>완료 기준</b>: 사진 폴더에서 <kbd>→</kbd> 키를 계속 누르면 Windows 탐색기 이름순과 같은 순서로 이미지가 넘어가고, 각 이미지는 창에 꽉 찬 상태로 표시된다.</div>
+  </div>
+
+  <div class="card">
+    <h3>Phase 4. 백그라운드 로딩과 안정성 <span class="days">1일</span></h3>
+    <ul class="check">
+      <li>디코딩을 별도 스레드로 분리해 UI 프리징 제거</li>
+      <li>앞/뒤 이미지 1장씩 프리로드 (LRU 캐시, 최대 3장)</li>
+      <li>손상 파일, 미지원 포맷, 권한 오류 시 화면에 에러 메시지 표시 후 계속 동작</li>
+      <li>매우 큰 이미지(예: 20000×20000) 처리: GPU 최대 텍스처 크기 초과 시 다운스케일 후 업로드</li>
+      <li>로딩 중 표시(스피너 또는 상태 텍스트)</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>Phase 5. 전체 화면과 마무리 <span class="days">0.5일</span></h3>
+    <ul class="check">
+      <li><kbd>F11</kbd>, 더블클릭으로 전체 화면 토글, <kbd>Esc</kbd>로 복귀</li>
+      <li>전체 화면에서 커서 자동 숨김 (선택)</li>
+      <li>우클릭 컨텍스트 메뉴: 열기, 창에 맞춤, 실제 크기, 전체 화면, 종료</li>
+      <li>아이콘 리소스 삽입 (<code>build.rs</code> + <code>winresource</code>)</li>
+      <li><code>cargo build --release</code>로 단일 exe 생성 및 크기 확인</li>
+    </ul>
+    <div class="done"><b>MVP 완료 기준</b>: 2.1절 필수 기능 F-01 ~ F-09 전부 동작.</div>
+  </div>
+
+  <div class="card">
+    <h3>Phase 6. 선택 기능 <span class="days">이후 점진적으로</span></h3>
+    <ul class="check">
+      <li>회전 / 반전 (O-01)</li>
+      <li>Windows 파일 연결 등록 스크립트 또는 안내 (O-08)</li>
+      <li>휴지통 삭제 (O-03)</li>
+      <li>EXIF 방향 자동 적용 (O-05)</li>
+      <li>GIF/WebP 애니메이션 (O-02)</li>
+      <li>설정 저장 (O-09)</li>
+    </ul>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="schedule">
+  <h2><span class="num">6.</span>일정 요약</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>단계</th><th>내용</th><th class="center">예상 소요</th><th class="center">누적</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">Phase 0</td><td>환경 준비</td><td class="center">0.5일</td><td class="center">0.5일</td></tr>
+      <tr><td class="nowrap">Phase 1</td><td>이미지 한 장 + Fit to Window</td><td class="center">1일</td><td class="center">1.5일</td></tr>
+      <tr><td class="nowrap">Phase 2</td><td>줌 / 팬 / 실제 크기</td><td class="center">1일</td><td class="center">2.5일</td></tr>
+      <tr><td class="nowrap">Phase 3</td><td>폴더 탐색, 파일 열기</td><td class="center">1일</td><td class="center">3.5일</td></tr>
+      <tr><td class="nowrap">Phase 4</td><td>백그라운드 로딩, 안정성</td><td class="center">1일</td><td class="center">4.5일</td></tr>
+      <tr><td class="nowrap">Phase 5</td><td>전체 화면, 마무리</td><td class="center">0.5일</td><td class="center"><strong>5일 (MVP)</strong></td></tr>
+      <tr><td class="nowrap">Phase 6</td><td>선택 기능</td><td class="center">필요 시</td><td class="center">—</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="callout info">하루 2~3시간 작업 기준이면 약 2주, 집중 작업이면 1주 안에 MVP 완성이 목표입니다.</div>
+</section>
+
+<!-- 7 -->
+<section id="keys">
+  <h2><span class="num">7.</span>키보드 / 마우스 조작 정의</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>입력</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><kbd>Ctrl+O</kbd></td><td>파일 열기</td></tr>
+      <tr><td class="nowrap"><kbd>←</kbd> / <kbd>→</kbd>, <kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>이전 / 다음 이미지</td></tr>
+      <tr><td class="nowrap"><kbd>Home</kbd> / <kbd>End</kbd></td><td>첫 / 마지막 이미지</td></tr>
+      <tr><td class="nowrap"><kbd>F</kbd></td><td>창에 꽉 차게 보기</td></tr>
+      <tr><td class="nowrap"><kbd>1</kbd></td><td>실제 크기 (100%)</td></tr>
+      <tr><td class="nowrap"><kbd>+</kbd> / <kbd>-</kbd>, 마우스 휠</td><td>확대 / 축소</td></tr>
+      <tr><td class="nowrap">마우스 드래그</td><td>이동(Pan)</td></tr>
+      <tr><td class="nowrap"><kbd>F11</kbd>, 더블클릭</td><td>전체 화면 토글</td></tr>
+      <tr><td class="nowrap"><kbd>Esc</kbd></td><td>전체 화면 해제 (일반 모드에서는 종료)</td></tr>
+      <tr><td class="nowrap"><kbd>R</kbd> / <kbd>Shift+R</kbd></td><td>시계 / 반시계 회전 (선택 기능)</td></tr>
+      <tr><td class="nowrap"><kbd>Delete</kbd></td><td>휴지통으로 이동 (선택 기능)</td></tr>
+      <tr><td class="nowrap"><kbd>I</kbd></td><td>이미지 정보 표시 토글 (선택 기능)</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="test">
+  <h2><span class="num">8.</span>테스트 계획</h2>
+
+  <h3>8.1 단위 테스트</h3>
+  <ul>
+    <li><code>viewport.rs</code>: Fit 계산, 커서 기준 줌 계산, 배율 상/하한 클램프</li>
+    <li><code>navigator.rs</code>: 확장자 필터(대소문자 무시), 이름순 자연 정렬(<code>img2.png</code> &lt; <code>img10.png</code>, <code>a</code> &lt; <code>B</code>), 한글 파일명 정렬, 끝에서 순환, 파일 1개일 때 무동작, 삭제된 파일 건너뛰기</li>
+  </ul>
+
+  <h3>8.2 수동 테스트 체크리스트</h3>
+  <ul class="check">
+    <li>포맷별 샘플 파일 8종 열기 (PNG, JPEG, BMP, GIF, WebP, TIFF, ICO, TGA)</li>
+    <li>알파 채널 PNG가 배경색 위에 올바르게 합성되는지</li>
+    <li>가로/세로/정사각 이미지 각각 Fit 시 여백이 대칭인지</li>
+    <li>창 크기 변경, 최대화, 복원 시 Fit 유지</li>
+    <li>100%, 125%, 150%, 200% 디스플레이 배율에서 실제 크기 표시 정확도</li>
+    <li>폴더에 파일 1개만 있을 때 / 0개일 때 탐색 키 동작</li>
+    <li>손상 파일 열었을 때 크래시 없이 에러 표시</li>
+    <li>100MB 이상 대형 이미지 로딩 중 UI 응답성</li>
+  </ul>
+
+  <h3>8.3 성능 측정</h3>
+  <ul>
+    <li>시작부터 첫 프레임 표시까지 시간 (<code>Instant</code> 로깅)</li>
+    <li>이미지 전환 지연 시간</li>
+    <li>릴리스 빌드 exe 크기 및 메모리 사용량 (작업 관리자)</li>
+  </ul>
+</section>
+
+<!-- 9 -->
+<section id="build">
+  <h2><span class="num">9.</span>빌드와 배포</h2>
+<pre><code># 개발 실행
+cargo run -- "C:\Pictures\sample.jpg"
+
+# 릴리스 빌드
+cargo build --release
+# 결과물: target\release\aspartame.exe</code></pre>
+  <ul>
+    <li><code>Cargo.toml</code>의 <code>[profile.release]</code>에 <code>lto</code>, <code>strip</code> 적용으로 exe 크기 최소화</li>
+    <li><code>build.rs</code>에서 <code>winresource</code>로 아이콘과 버전 정보 삽입</li>
+    <li>파일 연결: Windows 설정 &gt; 기본 앱에서 수동 등록하거나, 레지스트리 <code>.reg</code> 스크립트 제공 (선택 기능 O-08)</li>
+    <li>배포는 exe 단일 파일 복사로 충분. 설치 프로그램은 만들지 않음</li>
+  </ul>
+</section>
+
+<!-- 10 -->
+<section id="risk">
+  <h2><span class="num">10.</span>리스크와 대응</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>리스크</th><th>영향</th><th>대응</th></tr></thead>
+    <tbody>
+      <tr><td>GPU 최대 텍스처 크기(보통 8192 또는 16384px) 초과 이미지</td><td>업로드 실패 또는 크래시</td><td>로드 시 한계 초과면 비율 유지 다운스케일. 원본 픽셀 확인이 필요하면 타일링은 향후 과제</td></tr>
+      <tr><td>대형 이미지 디코딩 중 UI 정지</td><td>사용성 저하</td><td>Phase 4에서 백그라운드 스레드 분리</td></tr>
+      <tr><td>HiDPI에서 "실제 크기"가 흐릿함</td><td>요구사항 위반</td><td>물리 픽셀 기준으로 배율 정의, Nearest 필터 옵션</td></tr>
+      <tr><td>eframe 버전 업그레이드 시 API 변경</td><td>빌드 실패</td><td>Cargo.lock으로 버전 고정, 업그레이드는 별도 시간에</td></tr>
+      <tr><td>WebP/TIFF 일부 변형 미지원</td><td>특정 파일 열기 실패</td><td>에러 메시지 표시, 필요 시 <code>image</code> 크레이트 feature 추가 검토</td></tr>
+      <tr><td>한글 파일명/경로</td><td>열기 실패</td><td>Rust <code>PathBuf</code>는 UTF-16 경로를 정상 처리. 테스트 케이스에 한글 경로 포함</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="ref">
+  <h2><span class="num">11.</span>참고 자료</h2>
+  <ul>
+    <li>egui / eframe 공식 저장소 및 예제: <a href="https://github.com/emilk/egui">https://github.com/emilk/egui</a></li>
+    <li>image 크레이트 문서: <a href="https://docs.rs/image">https://docs.rs/image</a></li>
+    <li>rfd 크레이트 문서: <a href="https://docs.rs/rfd">https://docs.rs/rfd</a></li>
+    <li>Rust Windows 툴체인 안내: <a href="https://rust-lang.github.io/rustup/installation/windows-msvc.html">https://rust-lang.github.io/rustup/installation/windows-msvc.html</a></li>
+  </ul>
+</section>
+
+<footer>
+  이 문서는 <code>DEVELOPMENT_PLAN.md</code>의 내용을 그대로 옮긴 HTML 버전입니다. 계획을 수정할 때는 md 파일을 기준으로 갱신하세요.
+</footer>
+
+</main>
+</div>
+</body>
+</html>

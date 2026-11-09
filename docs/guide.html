@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aspartame 개발 가이드</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --text: #1f2328; --muted: #59636e; --border: #d9dde2;
+    --accent: #b7410e; --accent-soft: #fdeee4; --code-bg: #f0f1f3; --th-bg: #f2f3f5; --row-alt: #fafafa;
+    --ok: #2f8f4e; --sidebar-w: 270px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141618; --surface: #1c1f22; --text: #e6e8ea; --muted: #9aa3ad; --border: #30353b;
+      --accent: #f0865a; --accent-soft: #33241c; --code-bg: #24282c; --th-bg: #24282c; --row-alt: #1f2225;
+      --ok: #5fbf7d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: "Pretendard", "Malgun Gothic", "맑은 고딕", "Segoe UI", system-ui, sans-serif; font-size: 16px; line-height: 1.7; }
+  .layout { display: flex; min-height: 100vh; }
+  nav.toc { width: var(--sidebar-w); flex-shrink: 0; position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    padding: 28px 18px; border-right: 1px solid var(--border); background: var(--surface); }
+  nav.toc .brand { font-weight: 700; font-size: 15px; color: var(--accent); margin-bottom: 14px; }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; }
+  nav.toc li { margin: 2px 0; }
+  nav.toc a { display: block; padding: 5px 10px; border-radius: 6px; color: var(--muted); text-decoration: none; font-size: 14px; }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--accent); }
+  nav.toc ol ol { margin-left: 12px; }
+  nav.toc ol ol a { font-size: 13px; padding: 3px 10px; }
+  main { flex: 1; min-width: 0; padding: 40px clamp(20px, 5vw, 72px) 96px; max-width: 1000px; }
+  header.title { border-bottom: 2px solid var(--accent); padding-bottom: 18px; margin-bottom: 36px; }
+  header.title h1 { margin: 0 0 8px; font-size: 32px; line-height: 1.25; }
+  header.title .sub { color: var(--muted); font-size: 15px; }
+  header.title .meta { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .tag { display: inline-block; padding: 2px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 600; }
+  section { margin-bottom: 52px; }
+  h2 { font-size: 24px; margin: 0 0 18px; padding-top: 8px; scroll-margin-top: 24px; }
+  h2 .num { color: var(--accent); margin-right: 8px; }
+  h3 { font-size: 18px; margin: 28px 0 10px; scroll-margin-top: 24px; }
+  h4 { font-size: 15.5px; margin: 20px 0 6px; }
+  p { margin: 0 0 12px; }
+  ul, ol.plain { padding-left: 22px; margin: 0 0 14px; }
+  li { margin: 4px 0; }
+  code { font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace; font-size: .9em; background: var(--code-bg); padding: 1px 6px; border-radius: 4px; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.55; margin: 0 0 16px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  table { width: 100%; border-collapse: collapse; margin: 0; font-size: 14.5px; background: var(--surface); border: 1px solid var(--border); }
+  .table-wrap { overflow-x: auto; margin-bottom: 18px; border-radius: 8px; }
+  th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--border); }
+  th { background: var(--th-bg); font-weight: 700; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  td.nowrap { white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 0 0 16px; font-size: 15px; }
+  .callout.info { border-color: var(--muted); background: var(--code-bg); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; margin: 0 0 18px; }
+  .card h3 { margin-top: 0; }
+  kbd { font-family: "Cascadia Code", Consolas, monospace; font-size: .85em; background: var(--surface); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; }
+  .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin: 6px 0 18px; }
+  .flow .box { flex: 1 1 160px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font-size: 13.5px; }
+  .flow .box b { display: block; color: var(--accent); font-size: 14px; margin-bottom: 4px; }
+  .flow .arrow { align-self: center; color: var(--muted); font-size: 20px; }
+  .ok { color: var(--ok); font-weight: 700; }
+  footer { color: var(--muted); font-size: 13px; margin-top: 60px; border-top: 1px solid var(--border); padding-top: 16px; }
+  a { color: var(--accent); }
+  @media (max-width: 860px) {
+    .layout { display: block; }
+    nav.toc { position: static; width: auto; height: auto; border-right: none; border-bottom: 1px solid var(--border); }
+    main { padding: 24px 18px 64px; }
+  }
+  @media print { nav.toc { display: none; } main { max-width: none; padding: 0; } body { background: #fff; color: #000; } }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <div class="brand">Aspartame 개발 가이드</div>
+  <ol>
+    <li><a href="#intro">1. 소개</a></li>
+    <li><a href="#usage">2. 사용 가이드</a>
+      <ol>
+        <li><a href="#usage-run">실행과 등록</a></li>
+        <li><a href="#usage-keys">조작법</a></li>
+        <li><a href="#usage-trouble">문제 해결</a></li>
+      </ol>
+    </li>
+    <li><a href="#stack">3. 기술 스택</a></li>
+    <li><a href="#layout">4. 소스 구조</a></li>
+    <li><a href="#arch">5. 동작 원리</a>
+      <ol>
+        <li><a href="#arch-flow">프레임 흐름</a></li>
+        <li><a href="#arch-loader">백그라운드 디코딩</a></li>
+        <li><a href="#arch-nav">이름순 폴더 탐색</a></li>
+        <li><a href="#arch-view">창에 맞춤과 확대</a></li>
+        <li><a href="#arch-cache">텍스처 캐시</a></li>
+        <li><a href="#arch-input">입력 처리</a></li>
+        <li><a href="#arch-ui">그리기와 창 제어</a></li>
+      </ol>
+    </li>
+    <li><a href="#build">6. 빌드와 패키징</a></li>
+    <li><a href="#register">7. 기본 앱 등록 스크립트</a></li>
+    <li><a href="#test">8. 테스트와 검증</a></li>
+    <li><a href="#history">9. 개발 과정과 결정</a></li>
+    <li><a href="#next">10. 확장 아이디어</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<header class="title">
+  <h1>Aspartame 개발 가이드</h1>
+  <div class="sub">Windows 11용 경량 이미지 뷰어를 Rust로 만든 과정, 소스 구조, 동작 원리, 빌드와 배포 방법</div>
+  <div class="meta">
+    <span class="tag">Rust 1.98</span>
+    <span class="tag">eframe / egui 0.36.2</span>
+    <span class="tag">image 0.25.10</span>
+    <span class="tag">버전 0.1.0</span>
+    <span class="tag">2026-09-13</span>
+  </div>
+</header>
+
+<!-- 1 -->
+<section id="intro">
+  <h2><span class="num">1.</span>소개</h2>
+  <p>Aspartame는 Windows 11에서 쓰기 위해 직접 만든 이미지 뷰어입니다. 설치 프로그램 없이 <code>aspartame.exe</code> 하나로 실행되며, 외부 DLL에 의존하지 않습니다.</p>
+  <ul>
+    <li><strong>지원 포맷</strong>: PNG, JPEG, BMP, GIF(첫 프레임), WebP, TIFF, ICO, TGA</li>
+    <li><strong>핵심 기능 1</strong>: 창 크기에 꽉 차게 보기. 창 크기를 바꾸면 자동으로 다시 맞춥니다.</li>
+    <li><strong>핵심 기능 2</strong>: 좌우 방향키로 같은 폴더의 이미지를 <em>이름순</em>으로 이동합니다. Windows 탐색기와 같은 자연 정렬이라 <code>img2</code>가 <code>img10</code>보다 앞에 옵니다.</li>
+    <li>실제 크기(모니터 픽셀 1:1), 커서 기준 확대/축소, 드래그 이동, 전체 화면, 드래그 앤 드롭, 명령줄 인자 열기</li>
+    <li>백그라운드 디코딩과 앞뒤 이미지 미리 읽기, EXIF 회전 자동 적용, GPU 한계를 넘는 초대형 이미지 자동 축소</li>
+  </ul>
+  <div class="callout info">이 문서는 배포 zip에 함께 들어 있는 사용자 겸 개발자 가이드입니다. 소스 코드는 <code>C:\workspace\aspartame</code>에 있으며, 개발 계획서(<code>DEVELOPMENT_PLAN.md / .html</code>)와 짝을 이룹니다.</div>
+</section>
+
+<!-- 2 -->
+<section id="usage">
+  <h2><span class="num">2.</span>사용 가이드</h2>
+
+  <h3 id="usage-run">2.1 실행과 등록</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>파일</th><th>역할</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><code>aspartame.exe</code></td><td>뷰어 본체. 더블클릭해 열거나, 이미지를 이 파일 위로 끌어다 놓거나, <code>aspartame.exe 사진.jpg</code>처럼 인자로 실행합니다.</td></tr>
+      <tr><td class="nowrap"><code>register-default-viewer.bat</code></td><td>Windows 기본 이미지 뷰어 후보로 등록합니다. 관리자 권한이 필요 없습니다. 자세한 동작은 <a href="#register">7장</a>.</td></tr>
+      <tr><td class="nowrap"><code>unregister-default-viewer.bat</code></td><td>등록을 되돌립니다. <code>/purge</code>를 붙이면 복사해 둔 exe도 지웁니다.</td></tr>
+      <tr><td class="nowrap"><code>사용법.txt</code>, <code>README.md</code></td><td>짧은 안내문과 개발자용 README.</td></tr>
+      <tr><td class="nowrap"><code>개발가이드.html</code></td><td>이 문서.</td></tr>
+    </tbody>
+  </table></div>
+  <ol class="plain">
+    <li><code>register-default-viewer.bat</code>를 실행합니다. exe가 <code>%LOCALAPPDATA%\Programs\Aspartame</code>로 복사되고 레지스트리에 등록됩니다.</li>
+    <li>자동으로 열리는 <strong>설정 &gt; 앱 &gt; 기본 앱 &gt; Aspartame</strong> 페이지에서 [기본값으로 설정] 단추를 누르거나, 확장자를 하나씩 눌러 Aspartame를 고릅니다.</li>
+    <li>이후 탐색기에서 이미지를 더블클릭하면 Aspartame로 열립니다.</li>
+  </ol>
+  <div class="callout">Windows 10/11은 보안상 스크립트가 기본 앱을 직접 바꾸는 것을 막습니다. 그래서 2번 단계의 마지막 선택만은 사용자가 설정 창에서 직접 해야 합니다. 대신 스크립트가 필요한 등록을 모두 해 두고 해당 페이지를 바로 열어 줍니다.</div>
+
+  <h3 id="usage-keys">2.2 조작법</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>입력</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><kbd>Ctrl+O</kbd></td><td>파일 열기 대화상자</td></tr>
+      <tr><td class="nowrap"><kbd>←</kbd> / <kbd>→</kbd>, <kbd>PageUp</kbd> / <kbd>PageDown</kbd></td><td>이전 / 다음 이미지 (이름순, 끝에서 순환)</td></tr>
+      <tr><td class="nowrap"><kbd>Home</kbd> / <kbd>End</kbd></td><td>첫 / 마지막 이미지</td></tr>
+      <tr><td class="nowrap"><kbd>F</kbd> 또는 <kbd>0</kbd></td><td>창에 꽉 차게 보기 (기본 상태)</td></tr>
+      <tr><td class="nowrap"><kbd>1</kbd></td><td>실제 크기. 이미지 1픽셀 = 모니터 1픽셀</td></tr>
+      <tr><td class="nowrap"><kbd>+</kbd> / <kbd>-</kbd>, 마우스 휠</td><td>확대 / 축소. 휠은 커서 아래 지점이 고정됩니다. 한 칸에 1.25배, 범위 1%~3200%</td></tr>
+      <tr><td class="nowrap">마우스 드래그</td><td>확대된 이미지 이동. 창보다 작은 축은 항상 가운데 정렬</td></tr>
+      <tr><td class="nowrap"><kbd>F11</kbd>, 더블클릭</td><td>전체 화면 토글. 전체 화면에서 2초간 움직임이 없으면 커서를 숨깁니다</td></tr>
+      <tr><td class="nowrap"><kbd>Esc</kbd></td><td>메뉴가 열려 있으면 메뉴 닫기, 전체 화면이면 해제, 그 외에는 종료</td></tr>
+      <tr><td class="nowrap"><kbd>I</kbd></td><td>파일 정보 오버레이 토글 (이름, 경로, 크기, 용량, 배율, 순번)</td></tr>
+      <tr><td class="nowrap"><kbd>F5</kbd></td><td>폴더 다시 읽기 (파일이 추가·삭제된 뒤)</td></tr>
+      <tr><td class="nowrap">우클릭</td><td>위 기능이 모두 담긴 컨텍스트 메뉴</td></tr>
+      <tr><td class="nowrap">드래그 앤 드롭</td><td>창에 이미지를 놓으면 그 파일과 폴더를 엽니다</td></tr>
+    </tbody>
+  </table></div>
+  <p>창 제목에는 항상 <code>파일명 — 가로×세로 — 배율% [순번/전체] — Aspartame</code> 형식으로 상태가 표시됩니다.</p>
+
+  <h3 id="usage-trouble">2.3 문제 해결</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>증상</th><th>원인과 대응</th></tr></thead>
+    <tbody>
+      <tr><td>exe가 "애플리케이션 제어 정책" 메시지와 함께 실행되지 않음</td><td>Windows 11 Smart App Control이 서명 없는 실행 파일을 차단합니다. Windows 보안 &gt; 앱 및 브라우저 컨트롤 &gt; Smart App Control 설정에서 끕니다. 한 번 끄면 Windows 재설치 전까지 다시 켤 수 없습니다.</td></tr>
+      <tr><td>메뉴와 안내 문구가 영어로 나옴</td><td><code>C:\Windows\Fonts\malgun.ttf</code>(맑은 고딕)를 찾지 못한 경우입니다. egui 기본 폰트에는 한글 글꼴이 없어, 시스템 폰트가 없으면 영어 문구로 대체합니다. 창 제목과 파일명은 OS가 그리므로 항상 한글로 보입니다.</td></tr>
+      <tr><td>매우 큰 이미지가 실제 크기(100%)에서도 약간 흐림</td><td>GPU 텍스처 한계(보통 8192 또는 16384px)를 넘는 이미지는 표시용으로 축소해 올립니다. <kbd>I</kbd> 정보 오버레이에 "표시용 축소" 줄이 나타납니다.</td></tr>
+      <tr><td>손상 파일을 열면 빨간 오류 문구가 뜸</td><td>정상 동작입니다. 창 제목에 "파일명 — 오류"가 표시되고, 방향키로 다음 파일로 넘어갈 수 있습니다.</td></tr>
+      <tr><td>파일을 지운 뒤 방향키가 이상함</td><td>이동 대상이 사라지면 자동으로 폴더를 다시 읽고 가장 가까운 파일로 갑니다. 새로 추가된 파일은 <kbd>F5</kbd>로 반영합니다.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 3 -->
+<section id="stack">
+  <h2><span class="num">3.</span>기술 스택</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>구성 요소</th><th>선택</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">언어 / 툴체인</td><td>Rust 1.98 stable, <code>x86_64-pc-windows-msvc</code></td><td>단일 exe, 빠른 디코딩, 안전한 스레드 처리. 링크에는 Visual Studio 2022의 MSVC 링커를 사용</td></tr>
+      <tr><td class="nowrap">GUI</td><td><code>eframe</code> + <code>egui</code> 0.36.2 (wgpu 백엔드)</td><td>즉시 모드라 코드가 짧고, 이미지를 GPU 텍스처로 올려 원하는 사각형에 그리는 API가 단순. 창 제목, 전체 화면, 드래그 앤 드롭, DPI 배율을 eframe이 제공</td></tr>
+      <tr><td class="nowrap">디코딩</td><td><code>image</code> 0.25.10</td><td>순수 Rust로 PNG, JPEG, BMP, GIF, WebP, TIFF, ICO, TGA를 모두 지원. EXIF 방향 정보(<code>orientation()</code>)와 리사이즈 내장</td></tr>
+      <tr><td class="nowrap">파일 대화상자</td><td><code>rfd</code> 0.17.2</td><td>Windows 공용 대화상자를 그대로 사용</td></tr>
+      <tr><td class="nowrap">리소스</td><td><code>winresource</code> 0.1.31 (build.rs)</td><td>exe에 아이콘과 버전 정보 삽입</td></tr>
+      <tr><td class="nowrap">기타</td><td><code>anyhow</code>, <code>log</code>, <code>env_logger</code></td><td>오류 문맥, 로깅. 디버그 빌드에서 <code>RUST_LOG=debug</code>로 디코딩 시간 등을 볼 수 있음</td></tr>
+    </tbody>
+  </table></div>
+  <p>검토했던 대안: iced(구조는 깔끔하지만 커스텀 이미지 뷰포트가 번거로움), slint(별도 마크업 학습), winit 단독(메뉴와 대화상자를 전부 직접 구현), Tauri(WebView 의존, 대용량 이미지 전달 비효율). 뷰어는 UI가 단순하고 "이미지 한 장을 원하는 배율과 위치에 그리는 것"이 핵심이라 egui가 가장 빨리 결과를 냈습니다.</p>
+</section>
+
+<!-- 4 -->
+<section id="layout">
+  <h2><span class="num">4.</span>소스 구조</h2>
+<pre><code>aspartame/
+├── Cargo.toml                 의존성, 빌드 프로필
+├── build.rs                   exe 아이콘·버전 정보 삽입 (winresource)
+├── assets/
+│   ├── icon.png               창·작업 표시줄 아이콘 (include_bytes!로 exe에 내장)
+│   └── icon.ico               exe 파일 아이콘
+├── src/
+│   ├── main.rs                진입점: 인자 처리, 창 옵션, run_native
+│   ├── app.rs                 ViewerApp: 상태, 입력 적용, 그리기, 텍스처 캐시, 창 제어
+│   ├── image_loader.rs        백그라운드 디코딩 스레드와 요청 큐
+│   ├── navigator.rs           폴더 스캔, 이름순 자연 정렬, 이전/다음 이동
+│   ├── viewport.rs            창에 맞춤 / 실제 크기 / 커서 기준 확대 계산
+│   └── input.rs               키·휠·드롭 입력 → Action 변환
+├── scripts/
+│   ├── register-default-viewer.bat     기본 앱 등록
+│   ├── unregister-default-viewer.bat   등록 해제
+│   ├── package.bat                     릴리스 빌드 + dist 폴더 + zip
+│   └── dist-readme.txt                 배포용 사용법.txt 원본
+├── docs/guide.html            이 문서의 원본
+├── README.md
+├── DEVELOPMENT_PLAN.md / .html   개발 계획서
+└── dist/                      package.bat 결과물 (Aspartame 폴더와 zip)</code></pre>
+
+  <div class="table-wrap"><table>
+    <thead><tr><th>모듈</th><th>줄 수(대략)</th><th>공개 항목</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap"><code>main.rs</code></td><td>60</td><td><code>APP_NAME</code>, <code>main()</code>, <code>load_window_icon()</code></td></tr>
+      <tr><td class="nowrap"><code>app.rs</code></td><td>640</td><td><code>ViewerApp::new()</code>, <code>impl eframe::App</code> (<code>logic</code>, <code>ui</code>, <code>clear_color</code>)</td></tr>
+      <tr><td class="nowrap"><code>image_loader.rs</code></td><td>190</td><td><code>ImageLoader::spawn/request/try_recv</code>, <code>LoadRequest</code>, <code>LoadResult</code>, <code>DecodedImage</code>, <code>Priority</code>, <code>decode()</code></td></tr>
+      <tr><td class="nowrap"><code>navigator.rs</code></td><td>350 (테스트 포함)</td><td><code>SUPPORTED_EXTENSIONS</code>, <code>natural_cmp()</code>, <code>scan_dir()</code>, <code>Navigator</code>(open/current/step/peek/first/last/refresh/position)</td></tr>
+      <tr><td class="nowrap"><code>viewport.rs</code></td><td>230 (테스트 포함)</td><td><code>ZoomMode</code>, <code>Viewport</code>(layout/zoom_by/pan_by/reset_fit/set_actual/percent), 상수 <code>MIN_SCALE</code>/<code>MAX_SCALE</code>/<code>ZOOM_STEP</code></td></tr>
+      <tr><td class="nowrap"><code>input.rs</code></td><td>110</td><td><code>Action</code>, <code>collect_actions()</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- 5 -->
+<section id="arch">
+  <h2><span class="num">5.</span>동작 원리</h2>
+
+  <h3 id="arch-flow">5.1 프레임 흐름</h3>
+  <p>eframe 0.36은 매 프레임 <code>App::logic()</code>을 먼저, 그다음 <code>App::ui()</code>를 호출합니다. Aspartame는 두 메서드를 다음처럼 나눠 씁니다.</p>
+  <div class="flow">
+    <div class="box"><b>입력 원천</b>명령줄 인자<br>드래그 앤 드롭<br>Ctrl+O 대화상자<br>방향키 / 휠 / 메뉴</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>Navigator</b>폴더 스캔<br>이름순 정렬<br>현재 인덱스 관리</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>ImageLoader (스레드)</b>디코딩 → RGBA8<br>EXIF 회전<br>초대형 축소</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>ViewerApp::logic</b>결과 수신<br>GPU 텍스처 업로드<br>캐시 갱신, 프리로드 요청</div>
+    <div class="arrow">→</div>
+    <div class="box"><b>ViewerApp::ui</b>Viewport 계산<br>이미지·오버레이 그리기<br>제목 / 전체 화면 / 커서</div>
+  </div>
+  <ol class="plain">
+    <li><strong>logic</strong>: 백엔드가 알려 주는 GPU 최대 텍스처 크기(<code>max_texture_side</code>)를 읽고, 첫 프레임이면 명령줄 인자 파일을 연 뒤, 로더 스레드가 보낸 결과를 모두 꺼내 처리합니다.</li>
+    <li><strong>ui</strong>: 이번 프레임의 입력을 <code>Action</code> 목록으로 바꾸고, 캔버스 영역에서 드래그·더블클릭·우클릭 메뉴를 처리한 뒤 액션을 적용하고, 이미지와 오버레이를 그립니다. 마지막에 창 제목과 커서 상태를 갱신합니다.</li>
+  </ol>
+
+  <h3 id="arch-loader">5.2 백그라운드 디코딩</h3>
+  <p><code>image_loader.rs</code>는 스레드 하나와 채널 두 개(요청, 결과)로 이루어집니다. UI 스레드는 절대 디코딩을 하지 않으므로 큰 사진을 열어도 창이 멈추지 않습니다.</p>
+  <h4>요청 구조</h4>
+<pre><code>LoadRequest { path, generation, priority: Primary | Preload, max_side }
+LoadResult  { path, generation, priority, result: Ok(DecodedImage) | Err(String) }</code></pre>
+  <ul>
+    <li><strong>generation</strong>: 사용자가 이동할 때마다 1씩 증가하는 번호입니다. 결과가 돌아왔을 때 번호가 현재와 다르면 이미 지나간 요청이므로 캐시에만 넣고 화면은 바꾸지 않습니다.</li>
+    <li><strong>마지막 요청 우선</strong>: 방향키를 연타하면 요청이 쌓입니다. 워커는 디코딩 하나를 시작하기 전에 큐를 전부 비워 <em>가장 새로운 Primary</em>만 남기고, 그보다 오래된 Primary와 프리로드는 버립니다. 열 장을 빠르게 넘겨도 중간 이미지를 헛되이 디코딩하지 않습니다.</li>
+    <li><strong>프리로드</strong>: 이미지가 화면에 뜨면 이름순으로 앞뒤 한 장씩 <code>Preload</code>로 요청합니다. 다음 방향키를 누르면 대부분 캐시에서 즉시 나옵니다.</li>
+    <li><strong>중복 제거</strong>: 같은 파일이 프리로드와 Primary로 겹쳐 있으면 한 번만 디코딩합니다.</li>
+    <li>결과를 보낸 뒤 <code>ctx.request_repaint()</code>로 UI 스레드를 깨웁니다.</li>
+  </ul>
+  <h4>decode() 단계</h4>
+  <ol class="plain">
+    <li>파일 크기를 읽고(정보 오버레이용) <code>ImageReader::open</code>으로 엽니다. 기본 메모리 제한이 정상적인 대형 사진도 거부하므로 <code>no_limits()</code>를 호출합니다.</li>
+    <li><code>with_guessed_format()</code>으로 확장자가 아닌 내용으로 포맷을 판별합니다. 확장자가 틀린 파일도 열립니다.</li>
+    <li><code>into_decoder()</code> → <code>orientation()</code>으로 EXIF 방향을 읽고, 디코딩 후 <code>apply_orientation()</code>으로 회전·반전을 적용합니다. 스마트폰 세로 사진이 올바른 방향으로 나옵니다.</li>
+    <li>긴 변이 <code>max_side</code>(GPU 한계)를 넘으면 비율을 유지한 채 <code>FilterType::Triangle</code>로 축소합니다. 원본 크기는 별도로 보관해 제목과 정보에 표시합니다.</li>
+    <li><code>into_rgba8()</code>로 스트레이트 알파 RGBA8 버퍼를 만들어 UI 스레드로 넘깁니다.</li>
+  </ol>
+
+  <h3 id="arch-nav">5.3 이름순 폴더 탐색</h3>
+  <p><code>navigator.rs</code>는 열린 파일의 폴더를 한 번 스캔해 지원 확장자만 남기고 정렬한 목록과 현재 인덱스를 들고 있습니다.</p>
+  <h4>자연 정렬 알고리즘 (<code>natural_cmp</code>)</h4>
+  <p>두 파일명을 앞에서부터 한 글자씩 비교하되, 양쪽 모두 숫자가 시작되면 숫자 덩어리를 통째로 잘라 <em>값</em>으로 비교합니다.</p>
+  <ol class="plain">
+    <li>둘 다 숫자면: 앞의 0을 뗀 뒤 길이(자릿수)를 먼저, 같으면 문자열을 비교합니다. 값이 같으면 0이 적은 쪽(<code>1</code> &lt; <code>01</code>)이 앞섭니다.</li>
+    <li>그 외에는 두 문자를 소문자로 바꿔 비교합니다. 대소문자를 무시하므로 <code>a.png</code>와 <code>B.png</code>가 알파벳순으로 섞입니다.</li>
+    <li>끝까지 같으면 원래 문자열의 바이트 비교로 순서를 고정해 결과가 항상 결정적입니다.</li>
+  </ol>
+<pre><code>입력:  photo10.jpg, Photo2.jpg, photo1.jpg, 가.png, readme.txt, b.PNG
+결과:  b.PNG, photo1.jpg, Photo2.jpg, photo10.jpg, 가.png    (readme.txt 제외)</code></pre>
+  <p>한글은 유니코드 코드포인트 순이라 가나다순이 되고, 라틴 문자 뒤에 옵니다. Windows 탐색기의 기본 "이름" 정렬과 같은 결과를 목표로 했습니다.</p>
+  <h4>이동 규칙</h4>
+  <ul>
+    <li><code>step(±1)</code>은 끝에서 순환합니다(<code>wrap = true</code>). 이미지가 한 장이면 아무 동작도 하지 않습니다.</li>
+    <li><code>peek(±1)</code>은 이동하지 않고 이웃 경로만 돌려주며, 프리로드와 캐시 보존 대상을 정할 때 씁니다.</li>
+    <li>지원하지 않는 확장자(<code>readme.txt</code> 등)를 직접 열면 목록의 정렬 위치에 끼워 넣어 그 파일에서도 앞뒤로 이동할 수 있게 합니다.</li>
+    <li><code>refresh()</code>는 폴더를 다시 읽고, 현재 파일이 사라졌으면 그 자리를 차지한 파일(정렬상 다음 파일)을 선택합니다. 로더가 "파일 없음" 오류를 돌려주면 자동으로 호출됩니다.</li>
+    <li>같은 폴더 안에서는 대소문자만 다른 이름을 같은 파일로 봅니다(Windows 파일 시스템 특성).</li>
+  </ul>
+
+  <h3 id="arch-view">5.4 창에 맞춤과 확대</h3>
+  <p><code>viewport.rs</code>는 화면에 그릴 사각형을 결정하는 순수 계산 모듈입니다. 상태는 세 가지입니다.</p>
+<pre><code>enum ZoomMode { Fit, Actual, Custom }
+struct Viewport { mode, scale /* 논리 포인트 / 이미지 픽셀 */, pan /* 이미지 중심의 창 중심 대비 오프셋 */ }</code></pre>
+  <h4>창에 꽉 차게 (Fit)</h4>
+<pre><code>scale  = min(W / w, H / h)        // 창 W×H, 이미지 w×h
+draw   = 창 중심에 (w·scale) × (h·scale) 크기로 배치</code></pre>
+  <p>매 프레임 <code>layout()</code>이 다시 계산하므로 창 크기를 바꾸거나 전체 화면으로 전환하면 즉시 따라갑니다. 창보다 작은 이미지도 확대해서 채웁니다. 이미지가 바뀔 때마다 이 모드로 초기화됩니다.</p>
+  <h4>실제 크기 (Actual)</h4>
+  <p>"100%"는 <em>물리 픽셀</em> 기준입니다. egui는 논리 포인트 단위로 그리므로 <code>scale = 1 / pixels_per_point</code>로 두어야 이미지 1픽셀이 모니터 1픽셀에 대응합니다. 150% 배율 모니터에서도 흐려지지 않습니다. 제목의 배율 표시는 <code>scale × pixels_per_point × 100</code>입니다.</p>
+  <h4>커서 기준 확대 (Custom)</h4>
+<pre><code>// 커서 m, 현재 이미지 중심 c, 배율 s0 → s1
+c' = m − (m − c) · (s1 / s0)      // 커서 아래 이미지 지점이 그대로 머무는 새 중심</code></pre>
+  <p>휠 한 칸에 1.25배, 범위는 물리 픽셀 기준 1%~3200%입니다. 키보드 <kbd>+</kbd>/<kbd>-</kbd>는 창 중심을 기준점으로 씁니다.</p>
+  <h4>이동 범위 제한 (<code>clamp_pan</code>)</h4>
+  <p>그려진 이미지가 창보다 작은 축은 오프셋을 0으로 고정해 가운데 정렬하고, 큰 축은 이미지 가장자리가 창 안쪽으로 들어와 빈틈이 생기지 않는 범위로 제한합니다.</p>
+
+  <h3 id="arch-cache">5.5 텍스처 캐시</h3>
+  <p>디코딩된 이미지는 <code>ColorImage::from_rgba_unmultiplied</code>로 변환해 <code>ctx.load_texture</code>로 GPU에 올립니다. 필터는 확대·축소 모두 Linear이고 밉맵을 켜서, 사진을 15%처럼 크게 축소해 볼 때 생기는 반짝임(앨리어싱)을 줄입니다.</p>
+  <ul>
+    <li><code>TextureCache</code>는 경로를 키로 하는 LRU 목록입니다. 최대 3장, 총 512MB 예산을 넘으면 오래된 것부터 지웁니다.</li>
+    <li>지우지 않는 것: 지금 보이는 이미지, 이동 목표, 이름순 앞뒤 한 장. 앞뒤로 오갈 때 다시 디코딩하지 않습니다.</li>
+    <li>이동 목표가 캐시에 있으면 로더를 거치지 않고 즉시 전환합니다.</li>
+  </ul>
+
+  <h3 id="arch-input">5.6 입력 처리</h3>
+  <p><code>input.rs</code>의 <code>collect_actions()</code>는 egui의 <code>InputState</code>를 읽어 프레임마다 <code>Action</code> 목록을 만듭니다. 앱 로직은 키 코드가 아니라 액션만 보므로 단축키를 바꾸기 쉽습니다.</p>
+  <ul>
+    <li>키: 방향키/PageUp/PageDown → <code>Next/Prev</code>, Home/End, F/0 → <code>Fit</code>, 1 → <code>ActualSize</code>, +/=/- → 확대·축소, F11, Esc, F5, I, Ctrl+O.</li>
+    <li>휠: <code>Event::MouseWheel</code>을 단위별로 "칸" 수로 환산합니다(Line은 1칸, Point는 50포인트당 1칸, Page는 5칸). 한 프레임의 칸 수를 합쳐 <code>ZoomBy(1.25^칸)</code> 하나로 보냅니다.</li>
+    <li>드롭: <code>raw.dropped_files</code>의 경로를 모아 <code>OpenPaths</code>로 보내고, 첫 번째 실제 파일을 엽니다.</li>
+    <li>마우스 드래그, 더블클릭, 우클릭 메뉴는 캔버스의 <code>Response</code>에서 처리합니다. 메뉴가 열린 프레임의 Esc는 종료로 이어지지 않도록 <code>Popup::is_any_open</code>으로 걸러 냅니다.</li>
+    <li>egui 기본 동작인 Ctrl+<kbd>+</kbd>/<kbd>-</kbd> UI 배율 변경은 이미지 확대와 충돌하므로 <code>zoom_with_keyboard = false</code>로 끕니다.</li>
+  </ul>
+
+  <h3 id="arch-ui">5.7 그리기와 창 제어</h3>
+  <ul>
+    <li><strong>캔버스</strong>: <code>CentralPanel</code>에 여백 없는 프레임을 씌우고 전체 영역을 <code>Sense::click_and_drag</code>로 인터랙션 대상으로 잡습니다. 이미지는 <code>painter.image(texture, rect, uv, WHITE)</code> 한 줄로 그립니다.</li>
+    <li><strong>오버레이</strong>: 정보 패널(<kbd>I</kbd>)은 줄마다 갤리를 만들어 최대 너비로 반투명 상자를 그린 뒤 배치합니다. 오류는 파일명(흰색)과 원인(빨간색)을 가운데에, 로딩 스피너는 150ms 이상 걸릴 때만 우하단에, 드롭 힌트는 파일을 창 위로 끌고 올 때 테두리와 함께 표시합니다.</li>
+    <li><strong>한글 폰트</strong>: 시작 시 <code>%SystemRoot%\Fonts\malgun.ttf</code>를 읽어 egui 폰트 패밀리 끝에 추가합니다. 라틴 글자는 egui 기본 폰트, 한글은 맑은 고딕으로 대체됩니다. 폰트가 없으면 UI 문구를 영어로 바꿉니다.</li>
+    <li><strong>창 제목</strong>: 값이 바뀔 때만 <code>ViewportCommand::Title</code>을 보냅니다. 전체 화면은 <code>ViewportCommand::Fullscreen</code>, 종료는 <code>Close</code>, 커서 숨김은 <code>CursorVisible</code>입니다.</li>
+    <li><strong>배경</strong>: <code>clear_color</code>와 패널 채우기를 같은 진회색(#1C1C1E)으로 맞춰 창 크기 변경 중에도 깜빡이지 않습니다.</li>
+  </ul>
+</section>
+
+<!-- 6 -->
+<section id="build">
+  <h2><span class="num">6.</span>빌드와 패키징</h2>
+  <h3>사전 준비</h3>
+  <ul>
+    <li>Rust 툴체인: <code>rustup</code>으로 stable MSVC 설치</li>
+    <li>Visual Studio 2022 (C++ 데스크톱 워크로드) 또는 Build Tools: 링커와 Windows SDK(<code>rc.exe</code>, 아이콘 삽입용)</li>
+    <li>Smart App Control이 켜져 있으면 cargo 자체가 차단되므로 꺼야 합니다 (<a href="#history">9장</a>)</li>
+  </ul>
+  <h3>명령</h3>
+<pre><code>cargo run -- "C:\Pictures\sample.jpg"   # 개발 실행. 콘솔에 로그 출력 (RUST_LOG=debug 로 상세)
+cargo test                              # 단위 테스트 14개
+cargo build --release                   # target\release\aspartame.exe
+scripts\package.bat                     # 릴리스 빌드 + dist\Aspartame + zip
+scripts\package.bat /nobuild            # 빌드 생략, 배포 폴더만 다시 구성</code></pre>
+  <h3>Cargo 프로필</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>프로필</th><th>설정</th><th>이유</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">release</td><td><code>opt-level=3</code>, <code>lto=true</code>, <code>codegen-units=1</code>, <code>strip=true</code></td><td>exe 크기와 속도 최적화. 결과 약 16MB (wgpu 포함). 우리 크레이트 재컴파일에 약 2분 반 소요</td></tr>
+      <tr><td class="nowrap">dev</td><td>우리 코드 <code>opt-level=1</code>, 의존성 <code>opt-level=3</code></td><td>디버그 실행에서도 이미지 디코딩이 느리지 않도록 의존성만 최적화</td></tr>
+    </tbody>
+  </table></div>
+  <p><code>main.rs</code>의 <code>#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]</code> 덕분에 릴리스에서는 콘솔 창이 뜨지 않고, 디버그에서는 콘솔이 남아 로그를 볼 수 있습니다.</p>
+  <h3>package.bat가 하는 일</h3>
+  <ol class="plain">
+    <li><code>cargo build --release</code> (<code>/nobuild</code>면 생략)</li>
+    <li><code>dist\Aspartame</code>를 비우고 exe, 등록/해제 bat, <code>사용법.txt</code>, <code>README.md</code>, <code>개발가이드.html</code>을 복사</li>
+    <li><code>Cargo.toml</code>의 버전을 읽어 PowerShell <code>Compress-Archive</code>로 <code>dist\Aspartame-&lt;버전&gt;-win64.zip</code> 생성</li>
+  </ol>
+  <h3>build.rs</h3>
+  <p>대상 OS가 Windows이고 <code>assets\icon.ico</code>가 있으면 <code>winresource</code>로 아이콘과 ProductName, FileDescription을 리소스로 컴파일합니다. <code>rc.exe</code>가 없으면 경고만 내고 빌드는 계속됩니다. 아이콘 PNG/ICO는 PowerShell의 System.Drawing으로 그려 만들었습니다.</p>
+</section>
+
+<!-- 7 -->
+<section id="register">
+  <h2><span class="num">7.</span>기본 앱 등록 스크립트</h2>
+  <p><code>register-default-viewer.bat</code>는 관리자 권한 없이 현재 사용자 레지스트리(HKCU)에만 기록합니다. 단계별 동작은 다음과 같습니다.</p>
+  <ol class="plain">
+    <li><strong>exe 찾기</strong>: 인자로 준 경로 → 스크립트 옆의 <code>aspartame.exe</code> → <code>..\target\release\aspartame.exe</code> 순서로 찾습니다.</li>
+    <li><strong>복사</strong>: <code>%LOCALAPPDATA%\Programs\Aspartame\aspartame.exe</code>로 복사합니다. 빌드 폴더를 지워도 연결이 깨지지 않게 하기 위해서입니다.</li>
+    <li><strong>파일 형식 등록</strong> (<code>HKCU\Software\Classes\Aspartame.Image</code>): 표시 이름, <code>DefaultIcon</code>, <code>shell\open\command = "exe" "%1"</code></li>
+    <li><strong>기본 프로그램 등록</strong> (<code>HKCU\Software\Aspartame\Capabilities</code> + <code>HKCU\Software\RegisteredApplications</code>): 앱 이름·설명·아이콘과 <code>FileAssociations</code>에 12개 확장자 → <code>Aspartame.Image</code>. 이 등록 덕분에 설정 &gt; 기본 앱 목록과 "연결 프로그램" 목록에 나타납니다.</li>
+    <li><strong>연결 후보 추가</strong>: 각 확장자의 <code>OpenWithProgids</code>에 <code>Aspartame.Image</code>를 추가합니다. 기존 기본 앱은 건드리지 않습니다.</li>
+    <li><strong>셸 알림</strong>: PowerShell로 <code>SHChangeNotify(SHCNE_ASSOCCHANGED)</code>를 호출해 탐색기가 캐시를 갱신하게 합니다.</li>
+    <li><strong>설정 열기</strong>: <code>ms-settings:defaultapps?registeredAppUser=Aspartame</code>로 Aspartame 페이지를 엽니다. 여기서 사용자가 확장자를 고르면 끝입니다.</li>
+  </ol>
+  <p><code>unregister-default-viewer.bat</code>는 위 키와 값을 모두 삭제하고, <code>/purge</code>를 주면 복사한 exe 폴더도 지웁니다. Aspartame가 기본 앱이던 확장자는 다음에 열 때 Windows가 사용할 앱을 다시 묻습니다.</p>
+  <div class="callout info">bat 파일은 UTF-8(BOM 없음) + CRLF로 저장되어 있고 첫 줄에서 <code>chcp 65001</code>을 실행합니다. LF 줄 끝으로 저장하면 <code>for (...)</code> 블록이 깨지므로 편집기에서 CRLF를 유지하세요.</div>
+</section>
+
+<!-- 8 -->
+<section id="test">
+  <h2><span class="num">8.</span>테스트와 검증</h2>
+  <h3>단위 테스트 (<code>cargo test</code>, 14개 통과)</h3>
+  <div class="table-wrap"><table>
+    <thead><tr><th>모듈</th><th>테스트</th></tr></thead>
+    <tbody>
+      <tr><td class="nowrap">navigator (8)</td><td>숫자 값 순 정렬, 대소문자 무시, 앞자리 0 처리, 한글 정렬, 확장자 필터, 임시 폴더 스캔과 이동·순환·삽입, 삭제된 파일 refresh, 파일 1개일 때 무동작</td></tr>
+      <tr><td class="nowrap">viewport (6)</td><td>가로/세로 Fit 계산과 가운데 정렬, 작은 이미지 확대, 물리 픽셀 기준 실제 크기, 커서 아래 지점 고정 확대, 배율 상·하한, 이동 범위 제한</td></tr>
+    </tbody>
+  </table></div>
+  <h3>실행 검증 (릴리스 exe)</h3>
+  <p>여러 포맷·크기·이름의 테스트 이미지 폴더(<code>big.png</code> 9000×9000, <code>broken.jpg</code> 손상 파일, <code>Img1.bmp</code>, <code>img2.jpg</code>, <code>img10.png</code>, <code>사진.gif</code>)를 만들어 키 입력을 보내고 창 제목과 화면 캡처로 확인했습니다.</p>
+  <ul>
+    <li><span class="ok">✓</span> 시작 시 창에 맞춤(75%), <kbd>→</kbd> 연속 이동이 <code>img2 → img10 → 사진 → big</code> 순서로 진행하고 끝에서 순환</li>
+    <li><span class="ok">✓</span> 손상 파일은 오류 문구와 "파일명 — 오류" 제목, 이후 <kbd>←</kbd>로 캐시된 이전 이미지에 즉시 복귀</li>
+    <li><span class="ok">✓</span> <kbd>1</kbd> = 100%, <kbd>F</kbd> = 15%(9000px 이미지), <kbd>Home</kbd>/<kbd>End</kbd>, <kbd>F11</kbd> 전체 화면에서 배율 재계산(26%), <kbd>Esc</kbd> 복귀</li>
+    <li><span class="ok">✓</span> 정보 오버레이와 컨텍스트 메뉴의 한글 표시, 메뉴가 열린 상태의 <kbd>Esc</kbd>는 메뉴만 닫음</li>
+    <li><span class="ok">✓</span> exe에 아이콘·버전 정보(0.1.0) 내장, 등록/해제 bat의 레지스트리 기록과 완전 삭제</li>
+  </ul>
+</section>
+
+<!-- 9 -->
+<section id="history">
+  <h2><span class="num">9.</span>개발 과정과 결정</h2>
+  <div class="card">
+    <h3>1) 계획</h3>
+    <p>요구사항(대중적 포맷, 창에 꽉 차게 보기, 좌우 방향키 이름순 이동)을 정리하고 GUI 프레임워크를 비교해 egui를 골랐습니다. Phase 0~5(환경, 한 장 표시, 줌/팬, 폴더 탐색, 백그라운드 로딩, 전체 화면)로 나눈 계획서를 md와 html로 작성했습니다.</p>
+  </div>
+  <div class="card">
+    <h3>2) 최신 API 조사</h3>
+    <p>착수 시점의 최신 버전(eframe 0.36.2)은 계획 당시 알던 API와 달랐습니다. <code>App::update</code>가 <code>App::ui(&amp;mut Ui, &amp;mut Frame)</code>와 <code>App::logic(&amp;Context, &amp;mut Frame)</code>으로 나뉘었고, <code>CentralPanel::show</code>가 <code>&amp;Context</code> 대신 <code>&amp;mut Ui</code>를 받으며, 드롭 파일이 <code>Arc&lt;dyn DroppedFile&gt;</code> 핸들로 바뀌었습니다. docs.rs와 GitHub 태그 소스를 대조해 시그니처를 확인한 뒤 코드를 작성했습니다.</p>
+  </div>
+  <div class="card">
+    <h3>3) Smart App Control 차단</h3>
+    <p>코드를 다 쓴 뒤 컴파일하려 하자 Windows 11 Smart App Control이 서명 없는 <code>cargo.exe</code>를 차단했습니다(os error 4551). 이 PC에는 WSL, Docker, git도 없어 우회 빌드도 불가능했고, 정책 해제는 되돌릴 수 없는 시스템 변경이라 사용자 판단에 맡겼습니다. 그동안 등록 bat, 패키징 스크립트, 배포 폴더를 먼저 만들어 검증했습니다.</p>
+  </div>
+  <div class="card">
+    <h3>4) 빌드와 검증</h3>
+    <p>정책 해제 후 첫 릴리스 빌드가 한 번에 성공했고(경고 1개는 정리), 단위 테스트 14개가 통과했습니다. 실행 검증에서 두 가지를 고쳤습니다. 손상 파일을 열었을 때 제목에 파일명이 빠지던 것, 그리고 컨텍스트 메뉴를 Esc로 닫으면 앱까지 종료되던 것입니다.</p>
+  </div>
+  <h3>설계상 주요 선택</h3>
+  <ul>
+    <li><strong>이미지 전환 시 항상 창에 맞춤으로 초기화</strong>: 방향키만으로 넘겨 보는 사용 방식에 가장 자연스럽습니다.</li>
+    <li><strong>"100%"를 물리 픽셀로 정의</strong>: HiDPI 모니터에서 실제 크기가 흐려지지 않게 하려는 요구사항 때문입니다.</li>
+    <li><strong>ProgID + Capabilities 등록</strong>: <code>assoc</code>/<code>ftype</code>은 관리자 권한이 필요하고 Windows 10/11의 사용자 선택(UserChoice)에 밀립니다. 정식 등록 후 설정 페이지를 열어 주는 방식이 정책을 우회하지 않으면서 가장 짧은 경로입니다.</li>
+    <li><strong>exe를 LOCALAPPDATA로 복사해 등록</strong>: 빌드 폴더 정리나 이동으로 연결이 깨지는 일을 막습니다.</li>
+    <li><strong>밉맵 켜기</strong>: 큰 사진을 작게 볼 때의 화질이 뷰어의 첫인상을 좌우합니다.</li>
+  </ul>
+</section>
+
+<!-- 10 -->
+<section id="next">
+  <h2><span class="num">10.</span>확장 아이디어</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th>기능</th><th>구현 힌트</th></tr></thead>
+    <tbody>
+      <tr><td>회전 / 반전 (<kbd>R</kbd>)</td><td><code>DynamicImage::rotate90/fliph</code>로 픽셀을 돌린 뒤 텍스처를 다시 올리거나, <code>Shape::mesh</code>에 UV를 회전해 넣어 GPU에서 처리</td></tr>
+      <tr><td>GIF / WebP 애니메이션</td><td><code>image::AnimationDecoder</code>로 프레임을 모두 디코딩해 텍스처 배열로 보관하고, 프레임 지연 시간에 맞춰 <code>request_repaint_after</code></td></tr>
+      <tr><td>휴지통 삭제 (<kbd>Delete</kbd>)</td><td><code>trash</code> 크레이트 → 삭제 후 <code>Navigator::refresh()</code></td></tr>
+      <tr><td>EXIF 정보 패널</td><td><code>decoder.exif_metadata()</code> + <code>kamadak-exif</code>로 파싱해 정보 오버레이에 추가</td></tr>
+      <tr><td>설정 저장</td><td>eframe <code>persistence</code> 기능 또는 <code>%APPDATA%\Aspartame\config.toml</code>에 배경색·순환 여부·창 위치 저장</td></tr>
+      <tr><td>폴더 감시</td><td><code>notify</code> 크레이트로 변경 이벤트를 받아 자동 <code>refresh()</code></td></tr>
+      <tr><td>배경색 / 체커보드</td><td><code>BG</code> 상수를 설정값으로 바꾸고, 투명 PNG용 체커보드는 <code>rect_filled</code> 반복 또는 작은 반복 텍스처</td></tr>
+      <tr><td>초대형 이미지 원본 보기</td><td>타일 단위 텍스처(예: 4096px)로 나눠 올리고 보이는 타일만 그리기</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<footer>
+  Aspartame 0.1.0 · 이 문서의 원본은 소스 트리의 <code>docs\guide.html</code>이며 <code>scripts\package.bat</code>가 배포 폴더에 <code>개발가이드.html</code>로 복사합니다.
+</footer>
+
+</main>
+</div>
+</body>
+</html>
