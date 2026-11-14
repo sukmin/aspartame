@@ -160,7 +160,7 @@ fn decode_request(request: &LoadRequest) -> anyhow::Result<DecodedImage> {
         return decode(&request.path, request.max_side);
     };
     // 요청마다 새로 열어, 사용 중에 zip이 바뀌어도 옛 목록으로 읽지 않게 합니다.
-    let bytes = ArchiveReader::open(&entry.archive)?.read_entry(entry.zip_index)?;
+    let bytes = ArchiveReader::open(&entry.archive)?.read_entry(entry.zip_index, entry.password.as_deref())?;
     let file_size = bytes.len() as u64;
     let image = decode_memory(bytes, &request.path, false)?;
     fit_to_texture(image, &request.path, file_size, request.max_side)

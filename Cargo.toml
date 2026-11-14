@@ -1,6 +1,6 @@
 [package]
 name = "aspartame"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Aspartame - a lightweight image viewer for Windows 11"
 build = "build.rs"
@@ -13,8 +13,26 @@ rfd = "0.17.2"
 anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
-zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+zip = { version = "9", default-features = false, features = [
+    "deflate-flate2", "deflate64", "bzip2", "lzma", "xz", "zstd", "ppmd", "legacy-zip", "aes-crypto",
+] }
 encoding_rs = "0.8"
+# 압축 풀기: 7z, rar, tar 와 gz/bz2/xz/zst 스트림.
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["aes256", "bzip2", "ppmd", "deflate", "zstd"] }
+unrar = "0.5"
+tar = { version = "0.4", default-features = false }
+flate2 = "1"
+bzip2 = "0.6"
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "optimization", "xz"] }
+zstd = "0.14"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Time"] }
+
+[dev-dependencies]
+# 테스트에서 암호가 걸린 7z 를 직접 만들기 위해 압축 기능을 켭니다.
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress"] }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["encoder"] }
 
 [build-dependencies]
 winresource = "0.1.31"

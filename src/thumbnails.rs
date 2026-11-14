@@ -122,7 +122,7 @@ fn make_thumbnail(
         Some(reader) => reader,
         empty => empty.insert(ArchiveReader::open(&archive.path)?),
     };
-    decode_thumbnail(reader.read_entry(entry.zip_index)?, &entry.path, side)
+    decode_thumbnail(reader.read_entry(entry.zip_index, archive.password())?, &entry.path, side)
 }
 
 #[cfg(test)]

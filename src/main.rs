@@ -1,13 +1,15 @@
 //! Aspartame - a lightweight image viewer for Windows 11.
 //!
-//! Usage: `aspartame.exe [IMAGE_FILE]`
+//! Usage: `aspartame.exe [IMAGE_OR_ARCHIVE_FILE]`
 
 // Release builds must not open a console window; debug builds keep it for logs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
 mod archive;
+mod archive_view;
 mod cr3;
+mod extract;
 mod gallery;
 mod image_loader;
 mod input;

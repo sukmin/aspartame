@@ -24,6 +24,10 @@ pub enum Action {
     Activate,
     /// 현재 CR3의 내장 JPEG를 파일로 저장.
     SaveJpeg,
+    /// 열어 둔 압축 파일을 그 파일이 있는 폴더에 풀기.
+    Extract,
+    /// 열어 둔 압축 파일을 고른 폴더에 풀기.
+    ExtractTo,
     Fit,
     ActualSize,
     ZoomIn,
@@ -71,6 +75,9 @@ pub fn collect_actions(input: &InputState) -> Vec<Action> {
     }
     if modifiers.command && pressed(Key::S) {
         actions.push(Action::SaveJpeg);
+    }
+    if modifiers.command && pressed(Key::E) {
+        actions.push(if modifiers.shift { Action::ExtractTo } else { Action::Extract });
     }
     if pressed(Key::ArrowUp) {
         actions.push(Action::Up);

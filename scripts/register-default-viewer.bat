@@ -20,6 +20,9 @@ set "PROG_ID=Aspartame.Image"
 set "INSTALL_DIR=%LOCALAPPDATA%\Programs\Aspartame"
 set "EXE=%INSTALL_DIR%\aspartame.exe"
 set "EXTS=.png .jpg .jpeg .jpe .jfif .bmp .gif .webp .tif .tiff .ico .tga .cr3"
+set "ARCHIVE_PROG_ID=Aspartame.Archive"
+set "ARCHIVE_EXTS=.zip .7z .rar .tar .gz .tgz .bz2 .tbz .tbz2 .xz .txz .zst .tzst"
+set "ARCHIVE_ICON=%SystemRoot%\System32\zipfldr.dll,0"
 
 rem --- 1) 실행 파일 찾기: 인자 > 스크립트 옆 > ..\target\release ---
 set "SRC="
@@ -64,8 +67,21 @@ for %%E in (%EXTS%) do (
     reg add "HKCU\Software\Classes\%%E\OpenWithProgids" /v "%PROG_ID%" /t REG_NONE /f >nul
 )
 
-rem zip 은 이미지가 없는 압축 파일에도 쓰이므로 기본 앱 일괄 지정에서 빼고 "연결 프로그램" 후보로만 추가합니다.
-reg add "HKCU\Software\Classes\.zip\OpenWithProgids" /v "%PROG_ID%" /t REG_NONE /f >nul
+rem --- 5-1) 압축 파일 형식 등록 ---
+rem 이미지와 같은 형식(ProgID)을 쓰면 탐색기가 압축 파일에도 Aspartame 아이콘을 붙입니다.
+rem 압축 파일은 따로 등록해 Windows 의 압축 폴더(zip) 아이콘으로 보이게 합니다.
+reg add "HKCU\Software\Classes\%ARCHIVE_PROG_ID%" /ve /d "압축 파일 (%APP_NAME%)" /f >nul
+reg add "HKCU\Software\Classes\%ARCHIVE_PROG_ID%" /v FriendlyTypeName /d "압축 파일 (%APP_NAME%)" /f >nul
+reg add "HKCU\Software\Classes\%ARCHIVE_PROG_ID%\DefaultIcon" /ve /d "%ARCHIVE_ICON%" /f >nul
+reg add "HKCU\Software\Classes\%ARCHIVE_PROG_ID%\shell\open" /ve /d "%APP_NAME%으로 열기" /f >nul
+reg add "HKCU\Software\Classes\%ARCHIVE_PROG_ID%\shell\open\command" /ve /d "\"%EXE%\" \"%%1\"" /f >nul
+
+rem 압축 파일은 기본 앱 일괄 지정에서 빼고 "연결 프로그램" 후보로만 추가합니다.
+for %%E in (%ARCHIVE_EXTS%) do (
+    reg add "HKCU\Software\Classes\%%E\OpenWithProgids" /v "%ARCHIVE_PROG_ID%" /t REG_NONE /f >nul
+)
+rem 0.3.0 까지는 zip 을 이미지 형식으로 등록했습니다. 그 흔적을 지웁니다.
+reg delete "HKCU\Software\Classes\.zip\OpenWithProgids" /v "%PROG_ID%" /f >nul 2>&1
 
 rem --- 6) 탐색기에 연결 정보 변경 알림 (SHChangeNotify SHCNE_ASSOCCHANGED) ---
 powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand JABzAGkAZwAgAD0AIAAnAFsARABsAGwASQBtAHAAbwByAHQAKAAiAHMAaABlAGwAbAAzADIALgBkAGwAbAAiACkAXQAgAHAAdQBiAGwAaQBjACAAcwB0AGEAdABpAGMAIABlAHgAdABlAHIAbgAgAHYAbwBpAGQAIABTAEgAQwBoAGEAbgBnAGUATgBvAHQAaQBmAHkAKABpAG4AdAAgAGUAdgBlAG4AdABJAGQALAAgAGkAbgB0ACAAZgBsAGEAZwBzACwAIABJAG4AdABQAHQAcgAgAGkAdABlAG0AMQAsACAASQBuAHQAUAB0AHIAIABpAHQAZQBtADIAKQA7ACcACgAkAHQAIAA9ACAAQQBkAGQALQBUAHkAcABlACAALQBNAGUAbQBiAGUAcgBEAGUAZgBpAG4AaQB0AGkAbwBuACAAJABzAGkAZwAgAC0ATgBhAG0AZQAgAE4AbwB0AGkAZgB5ACAALQBOAGEAbQBlAHMAcABhAGMAZQAgAEEAcwBwAGEAcgB0AGEAbQBlAFMAZQB0AHUAcAAgAC0AUABhAHMAcwBUAGgAcgB1AAoAJAB0ADoAOgBTAEgAQwBoAGEAbgBnAGUATgBvAHQAaQBmAHkAKAAwAHgAMAA4ADAAMAAwADAAMAAwACwAIAAwACwAIABbAEkAbgB0AFAAdAByAF0AOgA6AFoAZQByAG8ALAAgAFsASQBuAHQAUAB0AHIAXQA6ADoAWgBlAHIAbwApAA== >nul 2>&1
@@ -75,6 +91,11 @@ echo 등록이 끝났습니다. 이제 열리는 설정 창에서 기본 앱으�
 echo   - "Aspartame" 페이지에 [기본값으로 설정] 단추가 있으면 한 번만 누르면 됩니다.
 echo   - 없으면 .png, .jpg 등 확장자를 하나씩 눌러 Aspartame 를 선택하세요.
 echo   - 또는 탐색기에서 이미지를 우클릭 ^> 연결 프로그램 ^> 다른 앱 선택 ^> Aspartame ^> 항상.
+echo.
+echo 압축 파일(zip, 7z, rar 등)은 일괄 지정에 들어 있지 않습니다. Aspartame 로 열려면
+echo   탐색기에서 압축 파일을 우클릭 ^> 연결 프로그램 ^> 다른 앱 선택 ^> Aspartame ^> 항상.
+echo   이렇게 고르면 아이콘은 Windows 의 압축 폴더(zip) 모양으로 보입니다.
+echo   이전 버전에서 zip 을 이미 Aspartame 로 지정했다면 한 번만 다시 골라 주세요.
 echo.
 start "" "ms-settings:defaultapps?registeredAppUser=%APP_NAME%"
 endlocal

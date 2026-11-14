@@ -7,13 +7,12 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{ensure, Context as _};
 use zip::ZipArchive;
 
 use crate::navigator::{is_supported, natural_cmp};
-
-pub const ZIP_EXTENSION: &str = "zip";
 
 /// 손상되었거나 악의적인 zip이 메모리를 모두 쓰지 못하게 막는 항목당 상한.
 const MAX_ENTRY_BYTES: u64 = 1024 * 1024 * 1024;
@@ -33,6 +32,8 @@ pub struct ArchiveEntry {
 pub struct EntryRef {
     pub archive: PathBuf,
     pub zip_index: usize,
+    /// 암호가 걸린 zip이면 확인된 암호.
+    pub password: Option<Arc<[u8]>>,
 }
 
 /// 이름순으로 정렬한 zip 안의 이미지 목록.
@@ -40,6 +41,9 @@ pub struct EntryRef {
 pub struct Archive {
     pub path: PathBuf,
     pub entries: Vec<ArchiveEntry>,
+    /// 암호가 걸린 이미지 가운데 가장 작은 것의 zip 순번. 암호가 맞는지 확인할 때 읽어 봅니다.
+    encrypted_probe: Option<usize>,
+    password: Option<Arc<[u8]>>,
 }
 
 impl Archive {
@@ -66,14 +70,46 @@ impl Archive {
         // 같은 경로가 이웃해 있다는 보장은 없습니다.
         let mut seen = HashSet::new();
         entries.retain(|entry| seen.insert(entry.path.clone()));
-        Ok(Self { path, entries })
+
+        let encrypted_probe = entries
+            .iter()
+            .filter_map(|entry| Some((entry.zip_index, zip.by_index_data(entry.zip_index).ok()?)))
+            .filter(|(_, data)| data.encrypted())
+            .min_by_key(|(_, data)| data.size())
+            .map(|(zip_index, _)| zip_index);
+        Ok(Self { path, entries, encrypted_probe, password: None })
+    }
+
+    /// 암호가 걸린 이미지가 있는데 아직 암호를 받지 못했습니다.
+    pub fn needs_password(&self) -> bool {
+        self.encrypted_probe.is_some() && self.password.is_none()
+    }
+
+    /// 입력한 암호로 암호가 걸린 이미지를 읽어 보고, 맞으면 기억합니다.
+    pub fn unlock(&mut self, typed: &str) -> bool {
+        let Some(probe) = self.encrypted_probe else {
+            return true;
+        };
+        let Ok(mut reader) = ArchiveReader::open(&self.path) else {
+            return false;
+        };
+        let working = password_candidates(typed)
+            .into_iter()
+            .find(|candidate| reader.read_entry(probe, Some(candidate)).is_ok());
+        self.password = working.map(Arc::from);
+        self.password.is_some()
     }
 
     pub fn entry_ref(&self, path: &Path) -> Option<EntryRef> {
         self.entries.iter().find(|entry| entry.path == path).map(|entry| EntryRef {
             archive: self.path.clone(),
             zip_index: entry.zip_index,
+            password: self.password.clone(),
         })
+    }
+
+    pub fn password(&self) -> Option<&[u8]> {
+        self.password.as_deref()
     }
 
     pub fn paths(&self) -> Vec<PathBuf> {
@@ -91,8 +127,18 @@ impl ArchiveReader {
         Ok(Self { zip: open_zip(path)? })
     }
 
-    pub fn read_entry(&mut self, zip_index: usize) -> anyhow::Result<Vec<u8>> {
-        let entry = self.zip.by_index(zip_index).context("zip 항목을 열지 못했습니다")?;
+    /// `password`는 암호가 걸린 항목에만 씁니다.
+    pub fn read_entry(&mut self, zip_index: usize, password: Option<&[u8]>) -> anyhow::Result<Vec<u8>> {
+        let encrypted = self
+            .zip
+            .by_index_data(zip_index)
+            .context("zip 항목을 열지 못했습니다")?
+            .encrypted();
+        let entry = match password.filter(|_| encrypted) {
+            Some(password) => self.zip.by_index_decrypt(zip_index, password),
+            None => self.zip.by_index(zip_index),
+        }
+        .context("zip 항목을 열지 못했습니다")?;
         let mut bytes = Vec::with_capacity(entry.size().min(MAX_INITIAL_CAPACITY) as usize);
         entry
             .take(MAX_ENTRY_BYTES + 1)
@@ -103,27 +149,31 @@ impl ArchiveReader {
     }
 }
 
-/// 확장자가 아니라 파일 앞부분의 서명으로 zip인지 판별합니다.
-pub fn is_zip_file(path: &Path) -> bool {
-    let mut head = [0u8; 4];
-    File::open(path)
-        .and_then(|mut file| file.read_exact(&mut head))
-        .is_ok()
-        && (head == *b"PK\x03\x04" || head == *b"PK\x05\x06")
-}
-
-fn open_zip(path: &Path) -> anyhow::Result<ZipArchive<BufReader<File>>> {
+pub(crate) fn open_zip(path: &Path) -> anyhow::Result<ZipArchive<BufReader<File>>> {
     let file = File::open(path).with_context(|| format!("cannot open file: {}", path.display()))?;
     ZipArchive::new(BufReader::new(file)).context("zip 파일을 읽지 못했습니다")
 }
 
 /// UTF-8이 아닌 이름은 Windows 탐색기로 만든 옛 zip의 CP949로 해석합니다.
-fn decode_name(raw: &[u8]) -> String {
+pub(crate) fn decode_name(raw: &[u8]) -> String {
     let name = match std::str::from_utf8(raw) {
         Ok(name) => name.to_owned(),
         Err(_) => encoding_rs::EUC_KR.decode(raw).0.into_owned(),
     };
     name.replace('\\', "/")
+}
+
+/// 입력한 암호를 zip이 쓰는 바이트열로 바꿉니다. 한글처럼 ASCII가 아닌 암호는 만든
+/// 프로그램에 따라 UTF-8이거나 CP949이므로 둘 다 시도할 수 있게 돌려줍니다.
+pub(crate) fn password_candidates(typed: &str) -> Vec<Vec<u8>> {
+    let mut candidates = vec![typed.as_bytes().to_vec()];
+    if !typed.is_ascii() {
+        let (encoded, _, lossy) = encoding_rs::EUC_KR.encode(typed);
+        if !lossy {
+            candidates.push(encoded.into_owned());
+        }
+    }
+    candidates
 }
 
 /// macOS가 넣는 `__MACOSX/` 폴더와 `._이름` 파일은 이미지가 아닙니다.
@@ -225,7 +275,7 @@ mod tests {
         let path = temp_file("read", &build_zip(&[("a.jpg", b"first"), ("b.jpg", b"second")]));
         let archive = Archive::open(&path).unwrap();
         let entry = archive.entry_ref(&archive.entries[1].path).unwrap();
-        let bytes = ArchiveReader::open(&entry.archive).unwrap().read_entry(entry.zip_index);
+        let bytes = ArchiveReader::open(&entry.archive).unwrap().read_entry(entry.zip_index, None);
         std::fs::remove_file(&path).unwrap();
 
         assert_eq!(bytes.unwrap(), b"second");
@@ -262,15 +312,43 @@ mod tests {
     }
 
     #[test]
-    fn detects_zip_by_content_and_rejects_broken_zip() {
-        let zip = temp_file("detect", &build_zip(&[("a.jpg", b"x")]));
+    fn rejects_a_broken_zip() {
         let broken = temp_file("broken", b"PK\x03\x04 not really a zip");
-        let text = temp_file("text", b"hello world");
+        let result = Archive::open(&broken);
+        std::fs::remove_file(broken).unwrap();
+        assert!(result.is_err());
+    }
 
-        let results = (is_zip_file(&zip), is_zip_file(&text), Archive::open(&broken).is_err());
-        for path in [zip, broken, text] {
-            std::fs::remove_file(path).unwrap();
-        }
-        assert_eq!(results, (true, false, true));
+    #[test]
+    fn encrypted_images_need_the_right_password() {
+        use std::io::{Cursor, Write};
+        use zip::unstable::write::FileOptionsExt as _;
+        use zip::write::SimpleFileOptions;
+
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("open.jpg", SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"plain").unwrap();
+        let locked = SimpleFileOptions::default().with_deprecated_encryption(b"1234").unwrap();
+        writer.start_file("locked.jpg", locked).unwrap();
+        writer.write_all(b"secret").unwrap();
+        let path = temp_file("locked", &writer.finish().unwrap().into_inner());
+
+        let mut archive = Archive::open(&path).unwrap();
+        let needed = archive.needs_password();
+        let wrong = archive.unlock("0000");
+        let right = archive.unlock("1234");
+        let entry = archive.entry_ref(&archive.entries[0].path).unwrap();
+        let mut reader = ArchiveReader::open(&path).unwrap();
+        let bytes = reader.read_entry(entry.zip_index, entry.password.as_deref());
+        let without = reader.read_entry(entry.zip_index, None);
+        // 암호가 걸리지 않은 항목은 암호를 주어도 그대로 읽힙니다.
+        let plain = reader.read_entry(archive.entries[1].zip_index, archive.password());
+        drop(reader);
+        std::fs::remove_file(&path).unwrap();
+
+        assert_eq!((needed, wrong, right, archive.needs_password()), (true, false, true, false));
+        assert_eq!(bytes.unwrap(), b"secret");
+        assert!(without.is_err());
+        assert_eq!(plain.unwrap(), b"plain");
     }
 }

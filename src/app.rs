@@ -14,12 +14,17 @@ use egui::{
     TextureWrapMode, Vec2, ViewportCommand,
 };
 
-use crate::archive::{is_zip_file, Archive, ArchiveReader, ZIP_EXTENSION};
+use crate::archive::{Archive, ArchiveReader};
+use crate::archive_view::{
+    format_size, reveal_in_explorer, ArchivePanel, ExtractState, OverlayAction, PanelAction,
+    PasswordPrompt, PromptOutcome,
+};
 use crate::cr3;
+use crate::extract::{self, ExtractError, ExtractJob, Format};
 use crate::gallery::Gallery;
 use crate::image_loader::{DecodedImage, ImageLoader, LoadRequest, LoadResult, Priority};
 use crate::input::{collect_actions, Action, WheelStepper};
-use crate::navigator::{file_name, Navigator, SUPPORTED_EXTENSIONS};
+use crate::navigator::{file_name, is_supported, Navigator, SUPPORTED_EXTENSIONS};
 use crate::viewport::{Viewport, ZoomMode, ZOOM_STEP};
 use crate::APP_NAME;
 
@@ -43,9 +48,21 @@ const NOTICE_DURATION: Duration = Duration::from_secs(4);
 /// 썸네일을 더블클릭하면 두 번째 클릭이 한 장 보기 화면에 떨어집니다.
 /// 이 시간 안의 더블클릭은 전체 화면 전환으로 처리하지 않습니다.
 const DOUBLE_CLICK_GUARD: Duration = Duration::from_millis(500);
+/// 압축을 푸는 동안 진행률을 다시 그리는 간격.
+const EXTRACT_REPAINT: Duration = Duration::from_millis(100);
 
 /// 우클릭 메뉴 항목. `None`은 구분선입니다.
 type MenuItem = Option<(String, Action)>;
+
+/// 암호를 받아서 이어 갈 일.
+enum PasswordPurpose {
+    /// zip 안의 이미지를 갤러리로 보여 줍니다.
+    Gallery(Archive),
+    /// 압축 파일의 목록을 읽습니다.
+    List { path: PathBuf, format: Format },
+    /// 압축을 풉니다.
+    Extract { archive: PathBuf, format: Format, parent: PathBuf },
+}
 
 /// 잠시 표시했다가 사라지는 안내 문구.
 struct Notice {
@@ -140,6 +157,12 @@ pub struct ViewerApp {
     cache: TextureCache,
     /// zip을 열었을 때만 있습니다. 이때 `navigator`는 zip 안의 가상 경로를 다룹니다.
     gallery: Option<Gallery>,
+    /// 갤러리로 보여 줄 이미지가 없는 압축 파일을 열었을 때의 화면.
+    panel: Option<ArchivePanel>,
+    extract: ExtractState,
+    prompt: Option<(PasswordPrompt, PasswordPurpose)>,
+    /// 확인된 암호와 그 암호가 맞는 압축 파일. 다른 파일을 열면 버립니다.
+    password: Option<(PathBuf, String)>,
     notice: Option<Notice>,
     wheel: WheelStepper,
     entered_single_view: Option<Instant>,
@@ -176,6 +199,10 @@ impl ViewerApp {
             loader: ImageLoader::spawn(ctx.clone()),
             cache: TextureCache::default(),
             gallery: None,
+            panel: None,
+            extract: ExtractState::Idle,
+            prompt: None,
+            password: None,
             notice: None,
             wheel: WheelStepper::default(),
             entered_single_view: None,
@@ -206,37 +233,254 @@ impl ViewerApp {
     // ----- opening and navigation -------------------------------------------------
 
     fn open_path(&mut self, ctx: &egui::Context, path: &Path) {
-        if is_zip_file(path) {
-            self.open_archive(ctx, path);
-            return;
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        self.prompt = None;
+        if self.password.as_ref().is_some_and(|(archive, _)| *archive != path) {
+            self.password = None;
         }
-        self.gallery = None;
-        self.navigator.open(path);
-        self.error = None;
-        self.sync_target(ctx);
+        match extract::detect(&path) {
+            Some(Format::Zip) => self.open_zip(ctx, &path),
+            Some(format) => self.open_archive_panel(&path, format),
+            None => {
+                self.gallery = None;
+                self.navigator.open(&path);
+                self.error = None;
+                self.sync_target(ctx);
+            }
+        }
     }
 
-    fn open_archive(&mut self, ctx: &egui::Context, path: &Path) {
+    /// 이전에 보던 것을 화면에서 치웁니다.
+    fn reset_view(&mut self) {
         self.generation += 1;
         self.gallery = None;
+        self.panel = None;
         self.shown = None;
         self.pending = None;
         self.error = None;
         // zip이 바뀌었어도 가상 경로는 같을 수 있으므로 옛 텍스처를 남기지 않습니다.
         self.cache = TextureCache::default();
+    }
 
-        let failure = match Archive::open(path) {
-            Ok(archive) if !archive.entries.is_empty() => {
-                self.navigator.open_list(archive.paths());
-                self.gallery = Some(Gallery::new(ctx.clone(), Arc::new(archive), self.korean_ui));
+    /// 이미지가 있는 zip은 갤러리로, 없는 zip은 압축 파일 화면으로 엽니다.
+    fn open_zip(&mut self, ctx: &egui::Context, path: &Path) {
+        match Archive::open(path) {
+            Ok(archive) if archive.entries.is_empty() => self.open_archive_panel(path, Format::Zip),
+            Ok(mut archive) => {
+                let unlocked = !archive.needs_password()
+                    || self.known_password(path).is_some_and(|password| archive.unlock(&password));
+                if unlocked {
+                    self.show_gallery(ctx, archive);
+                } else {
+                    // 암호를 넣지 않고 닫아도 압축은 풀 수 있도록 뒤에 압축 파일 화면을 둡니다.
+                    self.open_archive_panel(path, Format::Zip);
+                    self.ask_password(path, PasswordPurpose::Gallery(archive), false);
+                }
+            }
+            Err(err) => {
+                log::error!("cannot open zip {}: {err:#}", path.display());
+                self.reset_view();
+                self.navigator.open(path);
+                self.error = Some(format!("{}\n{err:#}", file_name(path)));
+            }
+        }
+    }
+
+    fn show_gallery(&mut self, ctx: &egui::Context, archive: Archive) {
+        self.reset_view();
+        self.navigator.open_list(archive.paths());
+        self.gallery = Some(Gallery::new(ctx.clone(), Arc::new(archive), self.korean_ui));
+    }
+
+    fn open_archive_panel(&mut self, path: &Path, format: Format) {
+        self.reset_view();
+        self.navigator.open(path);
+        self.show_panel(path, format);
+    }
+
+    /// 압축 파일의 목록을 읽어 화면에 띄웁니다. 목록까지 암호화되어 있으면 암호를 묻습니다.
+    fn show_panel(&mut self, path: &Path, format: Format) {
+        let password = self.known_password(path);
+        let (listing, locked) = match extract::list(path, format, password.as_deref()) {
+            Ok(listing) => (listing, false),
+            Err(ExtractError::PasswordRequired | ExtractError::WrongPassword) => {
+                let purpose = PasswordPurpose::List { path: path.to_path_buf(), format };
+                self.password = None;
+                self.ask_password(path, purpose, password.is_some());
+                (None, true)
+            }
+            Err(ExtractError::Cancelled) => (None, false),
+            Err(ExtractError::Failed(err)) => {
+                log::error!("cannot read archive {}: {err:#}", path.display());
+                self.panel = None;
+                self.error = Some(format!("{}\n{err:#}", file_name(path)));
                 return;
             }
-            Ok(_) => self.t("이미지가 없는 zip 파일입니다", "This zip has no images").to_owned(),
-            Err(err) => format!("{err:#}"),
         };
-        log::error!("cannot open zip {}: {failure}", path.display());
-        self.navigator.open(path);
-        self.error = Some(format!("{}\n{failure}", file_name(path)));
+        self.error = None;
+        self.panel = Some(ArchivePanel { path: path.to_path_buf(), format, listing, locked });
+    }
+
+    fn known_password(&self, archive: &Path) -> Option<String> {
+        self.password
+            .as_ref()
+            .filter(|(path, _)| path == archive)
+            .map(|(_, password)| password.clone())
+    }
+
+    fn ask_password(&mut self, archive: &Path, purpose: PasswordPurpose, wrong: bool) {
+        self.prompt = Some((PasswordPrompt::new(archive, wrong), purpose));
+    }
+
+    /// 암호 입력 창을 그리고, 입력이 끝나면 하려던 일을 이어 갑니다.
+    fn handle_prompt(&mut self, ctx: &egui::Context) {
+        let Some((prompt, _)) = self.prompt.as_mut() else {
+            return;
+        };
+        let password = match prompt.show(ctx, self.korean_ui) {
+            PromptOutcome::Pending => return,
+            PromptOutcome::Cancelled => {
+                self.prompt = None;
+                return;
+            }
+            PromptOutcome::Submitted(password) => password,
+        };
+        let Some((_, purpose)) = self.prompt.take() else {
+            return;
+        };
+        match purpose {
+            PasswordPurpose::Gallery(mut archive) => {
+                if archive.unlock(&password) {
+                    self.password = Some((archive.path.clone(), password));
+                    self.show_gallery(ctx, archive);
+                } else {
+                    let path = archive.path.clone();
+                    self.ask_password(&path, PasswordPurpose::Gallery(archive), true);
+                }
+            }
+            PasswordPurpose::List { path, format } => {
+                self.password = Some((path.clone(), password));
+                self.show_panel(&path, format);
+            }
+            PasswordPurpose::Extract { archive, format, parent } => {
+                self.password = Some((archive.clone(), password));
+                self.start_extract(ctx, archive, format, parent);
+            }
+        }
+    }
+
+    // ----- extracting ---------------------------------------------------------------
+
+    /// 지금 보고 있는 압축 파일.
+    fn current_archive(&self) -> Option<(PathBuf, Format)> {
+        match (&self.gallery, &self.panel) {
+            (Some(gallery), _) => Some((gallery.archive.path.clone(), Format::Zip)),
+            (None, Some(panel)) => Some((panel.path.clone(), panel.format)),
+            (None, None) => None,
+        }
+    }
+
+    /// 압축을 풉니다. `choose_folder`이면 풀 곳을 묻고, 아니면 압축 파일 옆에 풉니다.
+    fn extract_current(&mut self, ctx: &egui::Context, choose_folder: bool) {
+        let Some((archive, format)) = self.current_archive() else {
+            let message = self.t("압축 파일을 열었을 때만 풀 수 있습니다", "Open an archive to extract it");
+            self.notify(message.to_owned(), true);
+            return;
+        };
+        if self.extract.is_running() {
+            let message = self.t("이미 압축을 풀고 있습니다", "An extraction is already running");
+            self.notify(message.to_owned(), true);
+            return;
+        }
+        let beside = archive.parent().map(Path::to_path_buf);
+        let parent = if choose_folder {
+            let mut dialog = rfd::FileDialog::new().set_title(self.t("압축을 풀 폴더", "Extract to folder"));
+            if let Some(dir) = &beside {
+                dialog = dialog.set_directory(dir);
+            }
+            dialog.pick_folder()
+        } else {
+            beside
+        };
+        if let Some(parent) = parent {
+            self.start_extract(ctx, archive, format, parent);
+        }
+    }
+
+    fn start_extract(&mut self, ctx: &egui::Context, archive: PathBuf, format: Format, parent: PathBuf) {
+        let password = self.known_password(&archive);
+        self.extract = ExtractState::Running(ExtractJob::spawn(ctx.clone(), archive, format, parent, password));
+    }
+
+    /// 압축 풀기가 끝났는지 확인하고 결과를 화면 상태에 반영합니다.
+    fn poll_extract(&mut self, ctx: &egui::Context) {
+        let ExtractState::Running(job) = &mut self.extract else {
+            return;
+        };
+        // 다른 암호 창에 입력하는 중이면 결과 처리를 미룹니다. 지금 처리하면 이 풀기가 띄우는
+        // 암호 창이 입력 중이던 창을 덮어씁니다.
+        if self.prompt.is_some() {
+            ctx.request_repaint_after(EXTRACT_REPAINT);
+            return;
+        }
+        let Some(result) = job.poll() else {
+            ctx.request_repaint_after(EXTRACT_REPAINT);
+            return;
+        };
+        let ExtractState::Running(job) = std::mem::replace(&mut self.extract, ExtractState::Idle) else {
+            return;
+        };
+        let purpose = PasswordPurpose::Extract {
+            archive: job.archive.clone(),
+            format: job.format,
+            parent: job.parent.clone(),
+        };
+        match result {
+            Ok(extracted) => {
+                self.extract = ExtractState::Done(extracted);
+                // 목록 암호 창을 닫고 풀기에서 암호를 넣었다면, 이제 목록도 읽을 수 있습니다.
+                let locked = self.panel.as_ref().is_some_and(|panel| panel.locked && panel.path == job.archive);
+                if locked {
+                    self.show_panel(&job.archive, job.format);
+                }
+            }
+            Err(ExtractError::PasswordRequired) => self.ask_password(&job.archive, purpose, false),
+            Err(ExtractError::WrongPassword) => {
+                if self.password.as_ref().is_some_and(|(archive, _)| *archive == job.archive) {
+                    self.password = None;
+                }
+                self.ask_password(&job.archive, purpose, true);
+            }
+            Err(ExtractError::Cancelled) => {
+                let message = self.t("압축 풀기를 취소했습니다", "Extraction cancelled");
+                self.notify(message.to_owned(), false);
+            }
+            Err(ExtractError::Failed(err)) => {
+                log::error!("failed to extract {}: {err:#}", job.archive.display());
+                self.extract = ExtractState::Failed(format!("{err:#}"));
+            }
+        }
+    }
+
+    fn show_extract_overlay(&mut self, ctx: &egui::Context) {
+        match self.extract.show(ctx, self.korean_ui) {
+            Some(OverlayAction::Cancel) => {
+                if let ExtractState::Running(job) = &self.extract {
+                    job.progress.cancel();
+                }
+            }
+            Some(OverlayAction::Reveal) => {
+                if let ExtractState::Done(extracted) = &self.extract {
+                    if let Err(err) = reveal_in_explorer(&extracted.target) {
+                        log::error!("cannot open {}: {err}", extracted.target.display());
+                        let message = self.t("폴더를 열지 못했습니다", "Cannot open the folder");
+                        self.notify(message.to_owned(), true);
+                    }
+                }
+            }
+            Some(OverlayAction::Dismiss) => self.extract = ExtractState::Idle,
+            None => {}
+        }
     }
 
     fn dialog_dir(&self) -> Option<&Path> {
@@ -248,10 +492,10 @@ impl ViewerApp {
 
     fn open_dialog(&mut self, ctx: &egui::Context) {
         let mut extensions = SUPPORTED_EXTENSIONS.to_vec();
-        extensions.push(ZIP_EXTENSION);
+        extensions.extend_from_slice(extract::EXTENSIONS);
         let mut dialog = rfd::FileDialog::new()
-            .set_title(self.t("이미지 열기", "Open image"))
-            .add_filter(self.t("이미지 및 zip 파일", "Images and zip files"), &extensions)
+            .set_title(self.t("이미지 또는 압축 파일 열기", "Open image or archive"))
+            .add_filter(self.t("이미지 및 압축 파일", "Images and archives"), &extensions)
             .add_filter(self.t("모든 파일", "All files"), &["*"]);
         if let Some(dir) = self.dialog_dir() {
             dialog = dialog.set_directory(dir);
@@ -337,7 +581,8 @@ impl ViewerApp {
         let entry = self.gallery.as_ref().and_then(|g| g.archive.entry_ref(source));
         let jpeg = match entry {
             Some(entry) => {
-                let bytes = ArchiveReader::open(&entry.archive)?.read_entry(entry.zip_index)?;
+                let bytes = ArchiveReader::open(&entry.archive)?
+                    .read_entry(entry.zip_index, entry.password.as_deref())?;
                 cr3::export_jpeg(&mut Cursor::new(bytes))?
             }
             None => {
@@ -360,11 +605,22 @@ impl ViewerApp {
     /// when possible, otherwise through the loader.
     fn sync_target(&mut self, ctx: &egui::Context) {
         self.generation += 1;
+        self.panel = None;
         let Some(target) = self.navigator.current().map(Path::to_path_buf) else {
             self.shown = None;
             self.pending = None;
             return;
         };
+
+        // 폴더를 넘기다가 처음에 열었던 압축 파일로 돌아오면 다시 압축 파일 화면을 보여 줍니다.
+        if self.gallery.is_none() && !is_supported(&target) {
+            if let Some(format) = extract::detect(&target) {
+                self.shown = None;
+                self.pending = None;
+                self.show_panel(&target, format);
+                return;
+            }
+        }
 
         if self.cache.contains(&target) {
             self.pending = None;
@@ -509,6 +765,8 @@ impl ViewerApp {
             // 갤러리에서만 의미가 있습니다.
             Action::Up | Action::Down | Action::Activate => {}
             Action::SaveJpeg => self.save_cr3_jpeg(),
+            Action::Extract => self.extract_current(ctx, false),
+            Action::ExtractTo => self.extract_current(ctx, true),
             Action::Fit => self.viewport.reset_fit(),
             Action::ActualSize => self.viewport.set_actual(),
             Action::ZoomIn => self.zoom(ZOOM_STEP, None, view, image_size, pixels_per_point),
@@ -531,13 +789,22 @@ impl ViewerApp {
                     ctx.send_viewport_cmd(ViewportCommand::Close);
                 }
             }
-            Action::Refresh => match self.gallery.as_ref().map(|g| g.archive.path.clone()) {
-                Some(path) => self.open_archive(ctx, &path),
-                None => {
-                    self.navigator.refresh();
-                    self.sync_target(ctx);
+            Action::Refresh => {
+                // 읽지 못해 오류만 띄운 압축 파일도 다시 읽을 수 있어야 합니다. 폴더 목록에는
+                // 이미지만 있으므로, 이미지가 아닌 파일을 보고 있었다면 그 파일을 다시 엽니다.
+                let reopen = self.current_archive().map(|(path, _)| path).or_else(|| {
+                    let current = self.navigator.current()?;
+                    (self.gallery.is_none() && !is_supported(current) && current.is_file())
+                        .then(|| current.to_path_buf())
+                });
+                match reopen {
+                    Some(path) => self.open_path(ctx, &path),
+                    None => {
+                        self.navigator.refresh();
+                        self.sync_target(ctx);
+                    }
                 }
-            },
+            }
             Action::ToggleInfo => self.show_info = !self.show_info,
         }
     }
@@ -607,7 +874,15 @@ impl ViewerApp {
                 self.t("장", ""),
             )
         });
-        let title = match (gallery_title, shown) {
+        let panel_title = self.panel.as_ref().map(|panel| {
+            format!(
+                "{} — {} {} — {APP_NAME}",
+                file_name(&panel.path),
+                panel.format.label(),
+                self.t("압축 파일", "archive"),
+            )
+        });
+        let title = match (gallery_title.or(panel_title), shown) {
             (Some(title), _) => title,
             (None, Some((path, img))) => {
                 let position = self
@@ -741,6 +1016,53 @@ impl ViewerApp {
         self.draw_drop_hint(&painter, view, &ctx);
     }
 
+    /// 이미지가 없는 압축 파일의 화면: 내용 목록과 압축 풀기 단추.
+    fn panel_view(&mut self, ui: &mut egui::Ui, mut actions: Vec<Action>) {
+        let ctx = ui.ctx().clone();
+        let view = ui.max_rect();
+        let pixels_per_point = ctx.pixels_per_point();
+        let menu_was_open = egui::containers::Popup::is_any_open(&ctx);
+        let items = self.panel_menu_items();
+
+        let background = ui.interact(view, ui.id().with("archive-panel"), Sense::click());
+        Self::show_context_menu(&background, &items, &mut actions);
+        let busy = self.extract.is_running();
+        match self.panel.as_ref().and_then(|panel| panel.show(ui, self.korean_ui, busy)) {
+            Some(PanelAction::Extract) => actions.push(Action::Extract),
+            Some(PanelAction::ExtractTo) => actions.push(Action::ExtractTo),
+            None => {}
+        }
+
+        for action in actions {
+            // 휠은 목록을 스크롤한 것이므로 이웃 파일로 넘기지 않습니다.
+            let skip = matches!(action, Action::Wheel(_)) || (menu_was_open && action == Action::Escape);
+            if !skip {
+                self.apply(&ctx, action, view, None, None, pixels_per_point);
+            }
+        }
+
+        let painter = ui.painter().clone();
+        self.draw_notice(&painter, view, &ctx);
+        self.draw_drop_hint(&painter, view, &ctx);
+    }
+
+    fn panel_menu_items(&self) -> Vec<MenuItem> {
+        vec![
+            Some((format!("{}   Ctrl+O", self.t("열기...", "Open...")), Action::Open)),
+            None,
+            Some((format!("{}   Ctrl+E", self.t("압축 풀기", "Extract")), Action::Extract)),
+            Some((
+                format!("{}   Ctrl+Shift+E", self.t("다른 폴더에 압축 풀기...", "Extract to...")),
+                Action::ExtractTo,
+            )),
+            None,
+            Some((format!("{}   F11", self.t("전체 화면", "Fullscreen")), Action::ToggleFullscreen)),
+            Some((format!("{}   F5", self.t("다시 읽기", "Reload")), Action::Refresh)),
+            None,
+            Some((format!("{}   Esc", self.t("종료", "Quit")), Action::Escape)),
+        ]
+    }
+
     fn apply_in_gallery(
         &mut self,
         ctx: &egui::Context,
@@ -777,6 +1099,12 @@ impl ViewerApp {
         vec![
             Some((format!("{}   Ctrl+O", self.t("열기...", "Open...")), Action::Open)),
             Some((format!("{}   Enter", self.t("선택한 이미지 보기", "View selected image")), Action::Activate)),
+            None,
+            Some((format!("{}   Ctrl+E", self.t("압축 풀기", "Extract")), Action::Extract)),
+            Some((
+                format!("{}   Ctrl+Shift+E", self.t("다른 폴더에 압축 풀기...", "Extract to...")),
+                Action::ExtractTo,
+            )),
             None,
             Some((format!("{}   F11", self.t("전체 화면", "Fullscreen")), Action::ToggleFullscreen)),
             Some((format!("{}   F5", self.t("zip 다시 읽기", "Reload zip")), Action::Refresh)),
@@ -816,6 +1144,11 @@ impl ViewerApp {
             None,
             Some((format!("{last_item}   Esc"), Action::Escape)),
         ];
+        if self.gallery.is_some() {
+            // "zip 다시 읽기" 바로 위에 둡니다.
+            let extract = (format!("{}   Ctrl+E", self.t("압축 풀기", "Extract")), Action::Extract);
+            items.insert(12, Some(extract));
+        }
         if save_item.is_some() {
             items.insert(1, save_item);
         }
@@ -853,8 +1186,13 @@ impl ViewerApp {
 
         let color = if notice.is_error { ERROR } else { TEXT };
         let galley = painter.layout_no_wrap(notice.text.clone(), FontId::proportional(14.0), color);
+        // 압축 풀기 상태 창이 아래쪽을 차지하고 있으면 가려지지 않게 위쪽에 띄웁니다.
+        let y = match self.extract {
+            ExtractState::Idle => view.bottom() - 40.0,
+            _ => view.top() + 40.0,
+        };
         let rect = Rect::from_center_size(
-            Pos2::new(view.center().x, view.bottom() - 40.0),
+            Pos2::new(view.center().x, y),
             galley.size() + Vec2::new(28.0, 16.0),
         );
         painter.rect_filled(rect, CornerRadius::same(6), PANEL);
@@ -882,8 +1220,8 @@ impl ViewerApp {
             view.center() - Vec2::new(0.0, 14.0),
             Align2::CENTER_CENTER,
             self.t(
-                "이미지 파일을 여기에 끌어다 놓거나 Ctrl+O로 여세요",
-                "Drop an image here or press Ctrl+O",
+                "이미지나 압축 파일을 여기에 끌어다 놓거나 Ctrl+O로 여세요",
+                "Drop an image or archive here or press Ctrl+O",
             ),
             FontId::proportional(18.0),
             MUTED,
@@ -1018,20 +1356,26 @@ impl eframe::App for ViewerApp {
         while let Some(result) = self.loader.try_recv() {
             self.handle_result(ctx, result);
         }
+        self.poll_extract(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        let actions = ctx.input(collect_actions);
+        // 암호를 입력하는 동안에는 글자 키가 뷰어의 단축키로 쓰이면 안 됩니다.
+        let actions = if self.prompt.is_some() { Vec::new() } else { ctx.input(collect_actions) };
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(BG))
             .show(ui, |ui| {
                 if self.gallery.as_ref().is_some_and(|g| g.visible) {
                     self.gallery_view(ui, actions);
+                } else if self.panel.is_some() {
+                    self.panel_view(ui, actions);
                 } else {
                     self.canvas(ui, actions);
                 }
             });
+        self.show_extract_overlay(&ctx);
+        self.handle_prompt(&ctx);
         self.update_title(&ctx);
         self.update_cursor(&ctx);
     }
@@ -1094,16 +1438,312 @@ fn install_korean_font(ctx: &egui::Context) -> bool {
     false
 }
 
-fn format_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    let b = bytes as f64;
-    if b >= KB * KB * KB {
-        format!("{:.2} GB", b / (KB * KB * KB))
-    } else if b >= KB * KB {
-        format!("{:.1} MB", b / (KB * KB))
-    } else if b >= KB {
-        format!("{:.0} KB", b / KB)
-    } else {
-        format!("{bytes} B")
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use egui::{Event, Key, Modifiers, RawInput};
+
+    use super::*;
+    use crate::archive::test_support::build_zip;
+    use crate::extract::test_support::{encrypted_zip, seven_zip, text, Workspace};
+
+    const NONE: Modifiers = Modifiers::NONE;
+    const CTRL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: true };
+
+    /// 창 없이 앱을 돌립니다. 프레임마다 가상 입력을 넣고 실제 화면 코드를 그대로 실행합니다.
+    struct Harness {
+        ctx: egui::Context,
+        app: ViewerApp,
+        frame: eframe::Frame,
+        time: f64,
+    }
+
+    impl Harness {
+        fn open(path: &Path) -> Self {
+            let ctx = egui::Context::default();
+            let creation = eframe::CreationContext::_new_kittest(ctx.clone());
+            let app = ViewerApp::new(&creation, Some(path.to_path_buf()));
+            let mut harness = Self { ctx, app, frame: eframe::Frame::_new_kittest(), time: 0.0 };
+            harness.step(NONE, Vec::new());
+            harness
+        }
+
+        fn step(&mut self, modifiers: Modifiers, mut events: Vec<Event>) {
+            self.time += 1.0 / 60.0;
+            events.insert(0, Event::ModifiersChanged(modifiers));
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+                time: Some(self.time),
+                predicted_dt: 1.0 / 60.0,
+                focused: true,
+                events,
+                ..Default::default()
+            };
+            let (app, frame) = (&mut self.app, &mut self.frame);
+            eframe::App::logic(app, &self.ctx, frame);
+            self.ctx
+                .run_ui(input, |ui| eframe::App::ui(app, ui, frame))
+                .textures_delta
+                .clear();
+        }
+
+        fn key(&mut self, modifiers: Modifiers, key: Key) {
+            let event = |pressed| Event::Key { key, physical_key: None, pressed, repeat: false, modifiers };
+            self.step(modifiers, vec![event(true)]);
+            self.step(modifiers, vec![event(false)]);
+        }
+
+        /// 암호 입력 칸에 글자를 넣고 Enter 를 누릅니다.
+        fn submit_password(&mut self, password: &str) {
+            self.step(NONE, vec![Event::Text(password.to_owned())]);
+            self.key(NONE, Key::Enter);
+        }
+
+        /// 압축 풀기가 끝날 때까지 프레임을 돌립니다.
+        fn finish_extract(&mut self) {
+            for _ in 0..4000 {
+                self.step(NONE, Vec::new());
+                if !self.app.extract.is_running() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            panic!("extraction did not finish");
+        }
+
+        fn extracted(&self) -> &Path {
+            match &self.app.extract {
+                ExtractState::Done(extracted) => &extracted.target,
+                ExtractState::Failed(message) => panic!("extraction failed: {message}"),
+                _ => panic!("nothing was extracted"),
+            }
+        }
+
+        /// 암호 창이 떠 있으면, 틀린 암호 때문에 다시 묻는 것인지를 돌려줍니다.
+        fn prompt(&self) -> Option<bool> {
+            self.app.prompt.as_ref().map(|(prompt, _)| prompt.is_retry())
+        }
+    }
+
+    fn png() -> Vec<u8> {
+        let mut out = Vec::new();
+        image::RgbImage::new(8, 8)
+            .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn a_zip_without_images_opens_the_archive_screen_and_extracts() {
+        let work = Workspace::new("app-plain");
+        let archive = work.file("docs.zip", &build_zip(&[("a.txt", b"one"), ("dir/b.txt", b"two")]));
+        let mut app = Harness::open(&archive);
+
+        assert!(app.app.gallery.is_none() && app.app.error.is_none());
+        let panel = app.app.panel.as_ref().expect("archive screen");
+        assert_eq!(panel.listing.as_ref().unwrap().files, 2);
+        assert_eq!(app.prompt(), None);
+
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.extracted(), work.0.join("docs"));
+        assert_eq!(text(&work.0.join("docs").join("dir").join("b.txt")), "two");
+    }
+
+    #[test]
+    fn extracting_an_encrypted_zip_asks_until_the_password_is_right() {
+        let work = Workspace::new("app-secret");
+        let archive = work.file("secret.zip", &encrypted_zip(&[("secret.txt", b"hidden")], true, b"1234"));
+        let mut app = Harness::open(&archive);
+        // zip 은 목록이 암호화되지 않으므로 열 때는 묻지 않습니다.
+        assert_eq!(app.prompt(), None);
+        assert!(app.app.panel.as_ref().unwrap().listing.as_ref().unwrap().encrypted);
+
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.prompt(), Some(false));
+
+        // 암호를 넣는 동안 누른 키는 뷰어의 단축키로 쓰이지 않습니다.
+        app.key(NONE, Key::I);
+        app.key(NONE, Key::ArrowRight);
+        assert!(!app.app.show_info);
+        assert!(app.app.panel.is_some());
+
+        app.submit_password("0000");
+        app.finish_extract();
+        assert_eq!(app.prompt(), Some(true));
+        assert_eq!(work.names(), vec!["secret.zip"]);
+
+        app.submit_password("1234");
+        app.finish_extract();
+        assert_eq!(app.prompt(), None);
+        assert_eq!(text(app.extracted()), "hidden");
+    }
+
+    #[test]
+    fn an_encrypted_photo_zip_becomes_a_gallery_after_the_password() {
+        let work = Workspace::new("app-photos");
+        let image = png();
+        let files: [(&str, &[u8]); 2] = [("1.png", &image), ("2.png", &image)];
+        let archive = work.file("photos.zip", &encrypted_zip(&files, false, b"1234"));
+        let mut app = Harness::open(&archive);
+
+        // 암호를 묻는 동안 뒤에는 압축 파일 화면이 있습니다.
+        assert_eq!(app.prompt(), Some(false));
+        assert!(app.app.gallery.is_none() && app.app.panel.is_some());
+
+        // Esc 는 암호 창만 닫습니다.
+        app.key(NONE, Key::Escape);
+        assert_eq!(app.prompt(), None);
+        assert!(app.app.gallery.is_none() && app.app.panel.is_some());
+
+        app.key(NONE, Key::F5);
+        assert_eq!(app.prompt(), Some(false));
+        app.submit_password("9999");
+        assert_eq!(app.prompt(), Some(true));
+        app.submit_password("1234");
+        assert_eq!(app.prompt(), None);
+        let gallery = app.app.gallery.as_ref().expect("gallery");
+        assert!(gallery.visible);
+        assert_eq!(gallery.archive.entries.len(), 2);
+        assert!(app.app.panel.is_none());
+
+        // 갤러리에서 확인한 암호는 압축을 풀 때 다시 묻지 않습니다.
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.prompt(), None);
+        assert_eq!(app.extracted(), work.0.join("photos"));
+        assert_eq!(std::fs::read(work.0.join("photos").join("2.png")).unwrap(), image);
+
+        // 다시 읽어도 기억한 암호로 바로 갤러리가 열립니다.
+        app.key(NONE, Key::F5);
+        assert_eq!(app.prompt(), None);
+        assert!(app.app.gallery.is_some());
+    }
+
+    #[test]
+    fn a_7z_with_hidden_names_lists_after_the_password() {
+        let work = Workspace::new("app-7z");
+        let files: [(&str, &[u8]); 2] = [("a.txt", b"alpha"), ("b.txt", b"beta")];
+        let archive = work.file("hidden.7z", &seven_zip(&files, Some("pw"), true));
+        let mut app = Harness::open(&archive);
+
+        assert_eq!(app.prompt(), Some(false));
+        let panel = app.app.panel.as_ref().expect("archive screen");
+        assert!(panel.locked && panel.listing.is_none());
+
+        app.submit_password("bad");
+        assert_eq!(app.prompt(), Some(true));
+        app.submit_password("pw");
+        assert_eq!(app.prompt(), None);
+        let panel = app.app.panel.as_ref().expect("archive screen");
+        assert!(!panel.locked);
+        assert_eq!(panel.listing.as_ref().unwrap().files, 2);
+
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.prompt(), None);
+        assert_eq!(text(&app.extracted().join("b.txt")), "beta");
+    }
+
+    #[test]
+    fn arrow_keys_leave_the_archive_screen_and_come_back() {
+        let work = Workspace::new("app-arrows");
+        work.file("a.png", &png());
+        let archive = work.file("b.zip", &build_zip(&[("note.txt", b"x")]));
+        let after = work.file("c.png", &png());
+        let mut app = Harness::open(&archive);
+        assert!(app.app.panel.is_some());
+
+        app.key(NONE, Key::ArrowRight);
+        assert!(app.app.panel.is_none());
+        assert_eq!(app.app.navigator.current(), Some(after.as_path()));
+
+        app.key(NONE, Key::ArrowLeft);
+        assert_eq!(app.app.panel.as_ref().map(|panel| panel.path.as_path()), Some(archive.as_path()));
+        assert!(app.app.error.is_none());
+    }
+
+    #[test]
+    fn a_photo_zip_still_opens_as_a_gallery_and_can_be_extracted() {
+        let work = Workspace::new("app-gallery");
+        let image = png();
+        let files: [(&str, &[u8]); 3] = [("1.png", &image), ("2.png", &image), ("readme.txt", b"hi")];
+        let archive = work.file("album.zip", &build_zip(&files));
+        let mut app = Harness::open(&archive);
+
+        assert_eq!(app.prompt(), None);
+        assert!(app.app.panel.is_none());
+        assert_eq!(app.app.gallery.as_ref().expect("gallery").archive.entries.len(), 2);
+
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.extracted(), work.0.join("album"));
+        assert_eq!(text(&work.0.join("album").join("readme.txt")), "hi");
+    }
+
+    #[test]
+    fn a_broken_archive_shows_an_error_and_f5_reads_it_again() {
+        let work = Workspace::new("app-broken");
+        work.file("neighbour.png", &png());
+        let archive = work.file("broken.7z", b"7z\xBC\xAF\x27\x1C not an archive at all");
+        let mut app = Harness::open(&archive);
+        assert!(app.app.panel.is_none());
+        assert!(app.app.error.as_deref().is_some_and(|message| message.starts_with("broken.7z")));
+
+        // 파일을 고친 뒤 F5 를 누르면 이웃 이미지로 넘어가지 않고 같은 파일을 다시 읽습니다.
+        std::fs::write(&archive, seven_zip(&[("a.txt", b"alpha")], None, false)).unwrap();
+        app.key(NONE, Key::F5);
+        assert!(app.app.error.is_none());
+        assert_eq!(app.app.panel.as_ref().map(|panel| panel.path.as_path()), Some(archive.as_path()));
+    }
+
+    #[test]
+    fn extracting_with_the_password_also_unlocks_the_listing() {
+        let work = Workspace::new("app-unlock");
+        let files: [(&str, &[u8]); 2] = [("a.txt", b"alpha"), ("b.txt", b"beta")];
+        let archive = work.file("hidden.7z", &seven_zip(&files, Some("pw"), true));
+        let mut app = Harness::open(&archive);
+
+        // 목록 암호 창을 닫고 바로 풉니다.
+        app.key(NONE, Key::Escape);
+        assert!(app.app.panel.as_ref().unwrap().locked);
+        app.key(CTRL, Key::E);
+        app.finish_extract();
+        assert_eq!(app.prompt(), Some(false));
+        app.submit_password("pw");
+        app.finish_extract();
+
+        assert_eq!(text(&app.extracted().join("a.txt")), "alpha");
+        let panel = app.app.panel.as_ref().unwrap();
+        assert!(!panel.locked);
+        assert_eq!(panel.listing.as_ref().unwrap().files, 2);
+    }
+
+    #[test]
+    fn a_finished_extraction_waits_for_the_open_password_window() {
+        let work = Workspace::new("app-two-prompts");
+        let first = work.file("first.zip", &encrypted_zip(&[("a.txt", b"alpha")], true, b"one"));
+        let second = work.file("second.7z", &seven_zip(&[("b.txt", b"beta")], Some("two"), true));
+        let mut app = Harness::open(&first);
+
+        // first.zip 을 풀기 시작한 직후에 second.7z 를 열어 목록 암호 창을 띄웁니다.
+        let ctx = app.ctx.clone();
+        app.app.start_extract(&ctx, first.clone(), Format::Zip, work.0.clone());
+        app.app.open_path(&ctx, &second);
+        std::thread::sleep(Duration::from_millis(300));
+        for _ in 0..5 {
+            app.step(NONE, Vec::new());
+        }
+        // 풀기는 암호가 없어 이미 끝났지만, 입력 중인 창을 덮어쓰지 않습니다.
+        assert!(matches!(app.app.prompt, Some((_, PasswordPurpose::List { .. }))));
+
+        app.submit_password("two");
+        app.finish_extract();
+        assert!(!app.app.panel.as_ref().unwrap().locked);
+        // 이제 first.zip 의 암호를 묻습니다. second.7z 의 암호는 그대로 기억합니다.
+        assert!(matches!(app.app.prompt, Some((_, PasswordPurpose::Extract { .. }))));
+        assert_eq!(app.app.known_password(&second).as_deref(), Some("two"));
     }
 }
